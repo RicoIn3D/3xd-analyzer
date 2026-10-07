@@ -1,10 +1,10 @@
 ---
-projekt: Analyzier
+projekt: Analyzer
 emne: datakilder
 opdateret: 2026-10-07
 ---
 
-# Analyzier: datakilder
+# Analyzer: datakilder
 
 Alle kilder vi bruger, overvejer eller har fravalgt. Hver run skriver i `run.json`, hvilke kilder og hvilke datoer/versioner den brugte (se `PROJEKT.md`, afsnit "Runs og kvalitetsevaluering").
 
@@ -20,8 +20,10 @@ Overblik (status pr. 2026-10-07, efter første run med rigtige data):
 | ESA WorldCover | Baseline | I brug, virker |
 | OpenStreetMap (Overpass) | Kontrol | I brug. Overpass er ustabil: retry over 3 servere og cache i 30 dage. Problemer logges i `runs/DRIFTSLOG.md` |
 | Copernicus Data Space (øvrige lag) | Støtte: radar, CLMS m.m. | Nøgler sat, ikke bygget endnu |
-| Danmarks Højdemodel, punktsky | Klassificerede laserpunkter (vegetation/bygning) | Kandidat |
-| Skråfoto + fotoindex | Kontrol og optagedato | Kandidat |
+| Danmarks Højdemodel, punktsky 2023 (Datafordeler) | Afgør træer og buske (laserpunkternes klasser) | I brug fra v0.3, virker |
+| Skråfoto 2025 (Dataforsyningen) | Visuel kontrol i viewer, fem retninger | I brug fra v0.3, virker |
+| Fotoindex | Optagedato for ortofoto | Kandidat |
+| Overture Maps, Meta/WRI Canopy Height, Mapillary | Kontrol og belægningstype | Kandidat (se nederst) |
 | Danmarks Arealinformation, Basemap04, Plandata | Baggrund | Kandidat, lav prioritet |
 | Datafordeler DAR | Adresse → BFE | Ikke nødvendig når BFE kendes |
 | Datafordeler BBR | Bygningsdata (punkter, ikke omrids) | Ikke brugt: omrids kommer fra GeoDanmark |
@@ -84,11 +86,21 @@ Fuld liste: https://grunddatamodel.datafordeler.dk/objekttypekatalog/GeoDanmark/
 
 - WCS 1.0.0: `https://api.dataforsyningen.dk/dhm_wcs_DAF?token=<token>`, coverages `dhm_terraen` og `dhm_overflade` (0,4 m).
 - Overflade minus terræn = højde over terræn. Græs < 0,5 m, buske 0,5–3 m, træer > 3 m.
-- **Punktsky (kandidat):** laserpunkterne er klassificeret (terræn, lav/mellem/høj vegetation, bygning). Kan give træer og buske direkte, også under løvfri forhold. Hentes som filer, ikke via WCS. Årgang og punkttæthed skal tjekkes.
+## Danmarks Højdemodel, punktsky (Datafordeler)
+
+- REST-API (nøgle: `DATAFORDELER_API_KEY`):
+  - Find filer: `https://api.datafordeler.dk/FileDownloads/v1.0/GetAvailablePointCloudFileDownloads?Version=1&MinX=..&MinY=..&MaxX=..&MaxY=..&apiKey=..` (EPSG:25832).
+  - Hent fil: `https://api.datafordeler.dk/FileDownloads/v1.0/GetPointCloudFile?Id=<id>&apiKey=..`
+- Datasæt: `Punktsky` (gældende), `Punktsky2023`, `Punktsky2015`, `Punktsky2007`. Pipelinen bruger `Punktsky2023`.
+- Filer á 1×1 km i LAZ. Testcasens fil `PUNKTSKY_1km_6369_558.laz` er 349 MB. Den gemmes i `cache/dhm/` og hentes kun én gang.
+- **Faldgrube:** API'et svarer `application/zip`, men sender selve LAZ-filen. Pipelinen kigger på de første bytes (`LASF`).
+- Målt på testcasen: 24 punkter pr. m². Fordeling i området: 36 % terræn, 48 % høj vegetation, 6 % mellem vegetation, 1 % lav vegetation, 7 % bygning.
+- Klasser (ASPRS): 2 terræn, 3 lav, 4 mellem og 5 høj vegetation, 6 bygning, 9 vand.
+- **Faldgrube:** biler i scanningen fra 2023 er ofte klassificeret som mellem vegetation. Buske fra punktskyen kræver derfor også lidt grønt i ortofotoet (NDVI > 0).
 
 ## Andre danske offentlige kilder
 
-- **Skråfoto-API (Dataforsyningen):** skråfotos fra fire retninger. Kontrol af fx belægningstype under træer.
+- **Skråfoto-API (Dataforsyningen), i brug:** STAC-API `https://api.dataforsyningen.dk/rest/skraafoto_api/v1.0` (token i header `token`). Samlinger `skraafotos2017` til `skraafotos2025`. Billederne er COG-filer på `skraafoto-cdn.dataforsyningen.dk` og kan læses uden token. Hvert billede har kameraparametre (`pers:*`), så ejendomsgrænsen kan tegnes ind. Testcasens 2025-billeder er fra 6. april 2025 (løvfrit).
 - **Fotoindex (Dataforsyningen, lag `fotoindex_<år>`):** optagetidspunkt for ortofotoet. Skal med i `run.json`.
 - **Danmarks Arealinformation (Miljøportalen):** § 3-beskyttet natur, fredskov m.m. Relevant for drift, ikke for klassificering. https://miljoeportal.dk/en/danmarks-miljoeportal-s-systems/danmarks-arealinformation
 - **Basemap04 (DCE, Aarhus Universitet):** arealanvendelse i 10 m-raster. Groft, men kan bruges som baseline ved siden af WorldCover. https://envs.au.dk/en/research-areas/society-environment-and-resources/land-use-and-gis/basemap
@@ -188,6 +200,12 @@ Andre åbne kilder, der er værd at tilføje:
 - **Danmarks Højdemodel**: se afsnittet ovenfor. Den vigtigste ekstra kilde.
 - **GeoDanmark vektordata** (Dataforsyningen): bygninger, vejkanter og andre tekniske flader som maske og kontrol.
 
+## Kandidater, ikke undersøgt i dybden
+
+- **Overture Maps Foundation:** åbne kortdata (bygninger, arealanvendelse, arealdække), bygget på bl.a. OSM. Kan hentes uden nøgle som GeoParquet. Mest kontrol, ligesom OSM. Licens ODbL/CDLA afhængigt af tema. https://overturemaps.org
+- **Meta/WRI Global Canopy Height:** trækronehøjde i ca. 1 m opløsning, beregnet med AI fra satellitbilleder. Danmarks Højdemodel er bedre her, men den kan bruges som sammenligning. Licens CC BY 4.0.
+- **Mapillary:** gadebilleder fra brugere, gratis API med nøgle. Kan vise belægningstypen (fliser, asfalt, grus) fra jordhøjde. Dækning skal tjekkes for den enkelte ejendom.
+
 ## Research-links
 
 Brugt 2026-10-07:
@@ -195,6 +213,7 @@ Brugt 2026-10-07:
 - Datafordeler GraphQL-skemaer: https://datafordeler.dk/GraphQLSchema/MAT.graphql (og BBR, DAR, GEODKV)
 - GeoDanmark Vektor WFS-entiteter: https://datafordeler.dk/dataoversigt/geodanmark-vektor/geodanmark-vektor-wfs-entiteter/
 - Lukning af DAF-WFS: https://dataforsyningen.dk/news/5124
+- Datafordeler fildownload (punktsky): https://datafordeler.dk/dataoversigt/danmarks-hoejdemodel-dhm/dhm-fildownload-punktsky/
 - CDSE-kvoter: https://documentation.dataspace.copernicus.eu/Quotas.html
 - God's Eye View: https://github.com/bilawalsidhu/gods-eye-view (README og DATA_SOURCES.md)
 - Gaia Earth View: https://wiki.p2pfoundation.net/Gaia_Earth_View

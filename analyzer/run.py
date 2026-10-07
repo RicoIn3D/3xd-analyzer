@@ -1,7 +1,7 @@
 """Run the pipeline for one property and save everything as a run under runs/.
 
 Example:
-    python -m analyzier.run --bfe 5522814 --center 558376,6369071 --size 400
+    python -m analyzer.run --bfe 5522814 --center 558376,6369071 --size 400
 """
 
 import argparse
@@ -23,7 +23,7 @@ from shapely.ops import transform as shapely_transform, unary_union
 from . import VERSION, classify, outputs
 from .classes import BYGNING, NAMES, UDENFOR
 from .grid import Grid
-from .sources import SourceUnavailable, dataforsyningen, datafordeler, open_rasters, osm
+from .sources import SourceUnavailable, dataforsyningen, datafordeler, open_rasters, osm, punktsky, skraafoto
 
 ROOT = Path(__file__).resolve().parent.parent
 RUNS = ROOT / "runs"
@@ -106,6 +106,7 @@ def main() -> None:
     ap.add_argument("--size", type=float, default=200, help="sidelængde i meter for firkanten omkring --center")
     ap.add_argument("--orto-years", default="2025,2024,2023", help="ortofoto-årgange, nyeste først")
     ap.add_argument("--s2-years", default="2025,2024", help="Sentinel-2 somre")
+    ap.add_argument("--uden-punktsky", action="store_true", help="spring punktskyen over (stor download)")
     ap.add_argument("--note", default="", help="fritekst om hvad denne run afprøver")
     args = ap.parse_args()
 
@@ -177,6 +178,7 @@ def main() -> None:
 
     method, classes, background, params = None, None, None, None
     hover = {}
+    skraa_images = []
     if has_token:
         ortho_years = [int(y) for y in args.orto_years.split(",")]
         for year in ortho_years:
@@ -210,7 +212,27 @@ def main() -> None:
                        {"navn": "Højde over terræn (DHM)", "fil": "output/lag/hoejde.png", "type": "overlay",
                         "legende": outputs.height_legend(params)}]
             hover = {"hoejde": ndsm, "ndvi": ndvi}
-            classes = classify.ortho_dhm(ndvi, ndsm, buildings, params)
+            lidar = None
+            if not args.uden_punktsky:
+                pc_index = len(src.items)
+                lidar = src.fetch("DHM punktsky 2023 (Datafordeler)", punktsky.punktsky, grid)
+                if lidar:
+                    src.items[pc_index].update({k: lidar[k] for k in ("punkter", "tæthed_pr_m2", "filer",
+                                                                       "fordeling_pct")})
+                    outputs.lidar_png(run_dir / "output" / "lag" / "punktsky.png", lidar["antal"])
+                    layers.append({"navn": "Punktsky: klasser (DHM 2023)", "fil": "output/lag/punktsky.png",
+                                   "type": "overlay", "info": outputs.LAYER_INFO["punktsky"]})
+            classes = classify.ortho_dhm(ndvi, ndsm, buildings, params, lidar["antal"] if lidar else None)
+            if parcel is not None:
+                ground_z = float(np.nanmedian(dtm[~geometry_mask([parcel], out_shape=grid.shape,
+                                                                   transform=grid.transform)]))
+                sk_index = len(src.items)
+                sk = src.fetch("Skråfotos 2025 (Dataforsyningen)", skraafoto.skraafoto, parcel, ground_z,
+                               run_dir / "output" / "skraafoto")
+                if sk:
+                    skraa_images = sk["billeder"]
+                    src.items[sk_index]["billeder"] = [{k: b[k] for k in ("retning", "id", "dato")}
+                                                       for b in skraa_images]
     else:
         src.note("Dataforsyningen (ortofoto + DHM)", "sprunget over",
                  "DATAFORSYNINGEN_TOKEN mangler i .env. Hovedkilderne er derfor ikke med")
@@ -292,15 +314,15 @@ def main() -> None:
 
     run_info = {
         "run": run_name, "tidspunkt": started.isoformat(timespec="seconds"),
-        "analyzier_version": VERSION, "git_commit": git_commit(), "bfe": args.bfe,
+        "analyzer_version": VERSION, "git_commit": git_commit(), "bfe": args.bfe,
         "omraade": area_note, "gyldigt_areal": valid_area,
         "ejendom_areal_m2": round(parcel.area, 1) if parcel is not None else None, "grid": {"crs": "EPSG:25832", "bbox": grid.bbox, "opløsning_m": res,
                                        "pixels": [grid.width, grid.height]},
-        "metode": method, "parametre": params, "note": args.note, "kilder": src.items,
+        "metode": method, "parametre": params, "skraafoto": skraa_images, "note": args.note, "kilder": src.items,
         "argumenter": vars(args),
     }
     (run_dir / "run.json").write_text(json.dumps(run_info, ensure_ascii=False, indent=2), encoding="utf-8")
-    outputs.write_viewer(run_dir / "viewer.html", f"Analyzier – BFE {args.bfe}", grid, layers, area, run_info,
+    outputs.write_viewer(run_dir / "viewer.html", f"Analyzer – BFE {args.bfe}", grid, layers, area, run_info,
                          rasters={**hover, "klasse": classes})
 
     template = (RUNS / "_skabelon" / "evaluering.md").read_text(encoding="utf-8")

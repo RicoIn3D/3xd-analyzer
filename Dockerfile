@@ -4,4 +4,4 @@ RUN apt-get update && apt-get install -y --no-install-recommends libexpat1 && rm
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 ENV PYTHONUNBUFFERED=1
-ENTRYPOINT ["python", "-m", "analyzier.run"]
+ENTRYPOINT ["python", "-m", "analyzer.run"]

@@ -1,12 +1,12 @@
 ---
-projekt: Analyzier
+projekt: Analyzer
 status: idé / oplæg
 oprettet: 2026-10-07
 ejer: Rico Sørensen
 bestiller: Mikael Kirkegaard
 ---
 
-# Analyzier: AI-beregnede udearealer
+# Analyzer: AI-beregnede udearealer
 
 ## Formål
 
@@ -113,7 +113,8 @@ Kræver Docker og en udfyldt `.env`.
 - Resultatet lander i `runs/<dato>_<tid>_bfe-<nr>/`. Åbn `viewer.html` i browseren.
 - `--omraade fil.geojson` bruger en polygon fra fil i stedet for matriklen.
 - `--uden-matrikel --center x,y` giver kun en forhåndsvisning. Arealerne gælder ikke ejendommen.
-- Koden ligger i `analyzier/`: `sources/` (datakilder), `classify.py` (regler), `outputs.py` (filer og viewer), `run.py` (orkestrering).
+- `--uden-punktsky` springer punktskyen over. Første gang en ejendom køres, hentes en fil på ca. 350 MB pr. km².
+- Koden ligger i `analyzer/`: `sources/` (datakilder), `classify.py` (regler), `outputs.py` (filer og viewer), `run.py` (orkestrering).
 
 ## Konfiguration (`.env`)
 

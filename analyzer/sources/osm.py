@@ -85,7 +85,7 @@ def _overpass(q: str) -> tuple[dict, dict]:
             started = time.monotonic()
             try:
                 r = requests.post(url, data={"data": q}, timeout=REQUEST_TIMEOUT_S,
-                                  headers={"User-Agent": "Analyzier/0.2 (3XD ApS)"})
+                                  headers={"User-Agent": "Analyzer/0.2 (3XD ApS)"})
                 result = f"HTTP {r.status_code}"
                 if r.status_code == 200:
                     answer = r.json()

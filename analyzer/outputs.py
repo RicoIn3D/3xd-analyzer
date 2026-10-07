@@ -82,6 +82,9 @@ LAYER_INFO = {
     "osm": "OpenStreetMap: frivilligt kortlagte data. Kun til kontrol, ikke facit.",
     "worldcover": "ESA WorldCover: europæisk arealdækkekort i 10 m opløsning. Grov baseline.",
     "sentinel2": "Sentinel-2: satellitbilleder fra EU's Copernicus, 10 m opløsning. Median af skyfrie sommerscener.",
+    "punktsky": ("Danmarks Højdemodels punktsky (laserscanning 2023). Viser den klasse, de fleste laserpunkter i "
+                 "området har: mørkegrøn = høj vegetation (træer), mellemgrøn = mellem vegetation (buske), "
+                 "lysegrøn = lav vegetation, rød = bygning, grå = terræn. Bruges til at afgøre træer og buske."),
     "ejendom": "Ejendomsgrænsen fra matriklen (samlet fast ejendom). Arealer regnes kun indenfor.",
 }
 
@@ -151,6 +154,23 @@ def encode_raster(data: np.ndarray, kind: str) -> str:
     else:  # class codes
         v = data
     return base64.b64encode(v.astype("uint8").tobytes()).decode("ascii")
+
+
+LIDAR_COLORS = {2: (170, 170, 170), 3: (170, 220, 120), 4: (60, 160, 80), 5: (16, 82, 32), 6: (200, 70, 60),
+                9: (60, 120, 220)}
+
+
+def lidar_png(path: Path, counts: dict) -> None:
+    """Dominant point class per cell, smoothed over a 5x5 neighbourhood."""
+    from scipy.ndimage import uniform_filter
+    classes = list(counts)
+    stack = np.stack([uniform_filter(counts[c].astype("float32"), size=5) for c in classes])
+    dominant = np.array(classes)[stack.argmax(axis=0)]
+    rgba = np.zeros((*dominant.shape, 4), dtype="uint8")
+    for c, color in LIDAR_COLORS.items():
+        rgba[dominant == c] = (*color, 255)
+    rgba[stack.sum(axis=0) == 0] = 0
+    Image.fromarray(rgba).save(path, optimize=True)
 
 
 def outline_png(path: Path, geom, grid: Grid, width_m: float = 1.0) -> None:
@@ -249,7 +269,10 @@ VIEWER_TEMPLATE = """<!doctype html>
   .i { display:inline-flex; align-items:center; justify-content:center; width:14px; height:14px; margin-left:6px;
        border-radius:50%; border:1px solid var(--muted); color:var(--muted); font:italic 600 10px/1 Georgia, serif;
        vertical-align:1px; cursor:help; }
-  .legend { margin:10px 0 6px; } .legend b { font-size:12px; font-weight:600; }
+  .legend { margin:10px 0 6px; }
+  .gallery { display:grid; grid-template-columns: 1fr 1fr; gap:6px; }
+  .gallery a { display:block; text-decoration:none; color:var(--muted); font-size:11px; }
+  .gallery img { width:100%; height:90px; object-fit:cover; border-radius:4px; border:1px solid var(--line); } .legend b { font-size:12px; font-weight:600; }
   .bar { height:12px; border-radius:3px; margin:4px 0 2px; border:1px solid var(--line); }
   .ticks { position:relative; height:14px; font-size:11px; color:var(--muted); font-variant-numeric: tabular-nums; }
   .ticks span { position:absolute; transform:translateX(-50%); white-space:nowrap; }
@@ -274,6 +297,8 @@ VIEWER_TEMPLATE = """<!doctype html>
   <label class="muted">Gennemsigtighed for lag</label>
   <input type="range" id="opacity" min="0" max="100" value="60">
   <h2>Arealer</h2><table id="areas"></table>
+  <div id="skraa-sec" hidden><h2>Skråfotos</h2><div id="skraa" class="gallery"></div>
+  <div class="muted">Magenta linje = ejendomsgrænsen. Klik for stort billede.</div></div>
   <h2>Kilder</h2><ul id="sources" class="muted"></ul>
   <h2>Evaluering</h2>
   <div class="muted">Udfyld <code>evaluering.md</code> i run-mappen.</div>
@@ -358,6 +383,16 @@ if (D.run.gyldigt_areal === false) {
 }
 if (D.run.ejendom_areal_m2) D.areas = { 'Ejendom (polygon)': D.run.ejendom_areal_m2, ...D.areas };
 document.getElementById('meta').textContent = `${D.run.run} · metode ${D.run.metode} · ${D.res} m/px`;
+if (D.run.skraafoto && D.run.skraafoto.length) {
+  document.getElementById('skraa-sec').hidden = false;
+  const g = document.getElementById('skraa');
+  for (const b of D.run.skraafoto) {
+    const a = document.createElement('a'); a.href = 'output/skraafoto/' + b.fil; a.target = '_blank';
+    const img = document.createElement('img'); img.src = a.href; img.alt = b.navn; img.loading = 'lazy';
+    const cap = document.createElement('div'); cap.textContent = `${b.navn} · ${b.dato}`;
+    a.append(img, cap); g.append(a);
+  }
+}
 const src = document.getElementById('sources');
 for (const s of D.run.kilder) {
   const li = document.createElement('li');
