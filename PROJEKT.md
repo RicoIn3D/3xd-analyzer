@@ -45,8 +45,8 @@ Kort fortalt:
 ## Foreslået pipeline
 
 1. **Input:** BFE-nummer. Kender vi kun adressen, slår vi BFE-nummeret op via DAR.
-2. **Opslag:** MAT via Datafordeler. Hent alle jordstykke-polygoner under BFE-nummeret og saml dem til ét analyseområde.
-3. **Maske:** træk bygninger fra (BBR/GeoDanmark).
+2. **Opslag:** MAT via Datafordeler (`MAT_SamletFastEjendom`). Ejendommens polygon er analyseområdet. Uden polygon stopper run'en.
+3. **Maske:** bygningsomrids fra GeoDanmark (Datafordeler WFS).
 4. **Hent billeder:** ortofoto (flere år) for polygonens bounding box. Hent højdemodel og alle Copernicus-lag (se [KILDER.md](KILDER.md)) for samme område. Hent også OSM-tags som kontroldata.
 5. **Klassificering:**
    - Første version: regelbaseret, med farve/vegetationsindeks fra ortofoto og højde fra DHM.
@@ -102,6 +102,19 @@ Ricos rettelser bliver til et facit:
 
 Så kan vi afprøve nye kilder og metoder hurtigt og se med det samme, om de flytter os mod 85 %. Ricos vurdering bruges derefter til nye testejendomme uden facit.
 
+## Sådan kører du en run
+
+Kræver Docker og en udfyldt `.env`.
+
+```bash
+./run.sh --bfe 5522814 --note "hvad denne run afprøver"
+```
+
+- Resultatet lander i `runs/<dato>_<tid>_bfe-<nr>/`. Åbn `viewer.html` i browseren.
+- `--omraade fil.geojson` bruger en polygon fra fil i stedet for matriklen.
+- `--uden-matrikel --center x,y` giver kun en forhåndsvisning. Arealerne gælder ikke ejendommen.
+- Koden ligger i `analyzier/`: `sources/` (datakilder), `classify.py` (regler), `outputs.py` (filer og viewer), `run.py` (orkestrering).
+
 ## Konfiguration (`.env`)
 
 ```dotenv
@@ -112,6 +125,7 @@ DATAFORDELER_MAT_VERSION=
 DATAFORDELER_GRAPHQL_BASE_URL=https://graphql.datafordeler.dk
 CDSE_CLIENT_ID=
 CDSE_CLIENT_SECRET=
+DATAFORSYNINGEN_TOKEN=
 ```
 
 - `.env` står i `.gitignore`. `.env.example` committes uden værdier.
@@ -122,7 +136,7 @@ CDSE_CLIENT_SECRET=
 2. Hvad er et "forvaltningskort" præcis for kunden: format, signaturer, krav til detaljer?
 3. Hvilke arealtyper skal skelnes? Skal belægning deles op (asfalt, fliser, grus)?
 4. Nøjagtighed: ca. 85 % på belægning er nok (Rico, 2026-10-07). Gælder samme krav for græs og træer/buske?
-5. Teknologivalg: .NET som resten af stacken, eller Python pga. geo/ML-biblioteker (rasterio, GDAL, PyTorch)?
+5. Teknologivalg: prototypen er Python i Docker (rasterio, GDAL). Skal den endelige løsning være .NET som resten af stacken?
 6. Hvilken produktlinje hører projektet til? Skal det kobles på DKV (lokationer/lejemål) eller være selvstændigt?
 7. Skal vi købe kommerciel SAR? Først når gratis data er målt mod 85 %-målet.
 8. Har vi adgang til ortofoto og DHM via Dataforsyningen (token), eller skal der oprettes en bruger?

@@ -1,0 +1,8 @@
+numpy==2.*
+pillow==11.*
+requests==2.*
+rasterio==1.4.*
+shapely==2.*
+pyproj==3.*
+python-dotenv==1.*
+scipy==1.*

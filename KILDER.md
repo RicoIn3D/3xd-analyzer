@@ -8,49 +8,96 @@ opdateret: 2026-10-07
 
 Alle kilder vi bruger, overvejer eller har fravalgt. Hver run skriver i `run.json`, hvilke kilder og hvilke datoer/versioner den brugte (se `PROJEKT.md`, afsnit "Runs og kvalitetsevaluering").
 
-Overblik:
+Overblik (status pr. 2026-10-07, efter første run med rigtige data):
 
-| Kilde | Rolle | Status |
+| Kilde | Rolle | Status i pipelinen |
 |---|---|---|
-| Datafordeler MAT | Analyseområde (jordstykker under BFE) | Primær |
-| Datafordeler DAR | Adresse → BFE | Hjælp |
-| Datafordeler BBR | Bygningsmaske | Valgfri |
-| Ortofoto (Dataforsyningen, flere år) | Hovedkilde til klassificering | Primær |
-| Danmarks Højdemodel | Højde: græs / buske / træer | Primær |
-| Skråfotos | Visuel kontrol | Kontrol |
-| Copernicus (alle lag) | Støtte: vegetation, sæson, fugt | Hentes, effekt måles |
+| Datafordeler MAT (`MAT_SamletFastEjendom`) | Analyseområde: ejendommens polygon | I brug, virker |
+| GeoDanmark vektor (Datafordeler WFS) | Bygningsomrids (maske), træer, p-pladser, hegn | I brug, virker |
+| Ortofoto RGB + CIR (Dataforsyningen) | Hovedkilde: farve og vegetationsindeks | I brug, virker |
+| Danmarks Højdemodel, terræn + overflade (Dataforsyningen) | Højde: græs / buske / træer | I brug, virker |
+| Sentinel-2 L2A (Earth Search, AWS) | Støtte: sommer-NDVI | I brug, virker |
+| ESA WorldCover | Baseline | I brug, virker |
+| OpenStreetMap (Overpass) | Kontrol | I brug, Overpass giver ofte timeout |
+| Copernicus Data Space (øvrige lag) | Støtte: radar, CLMS m.m. | Nøgler sat, ikke bygget endnu |
+| Danmarks Højdemodel, punktsky | Klassificerede laserpunkter (vegetation/bygning) | Kandidat |
+| Skråfoto + fotoindex | Kontrol og optagedato | Kandidat |
+| Danmarks Arealinformation, Basemap04, Plandata | Baggrund | Kandidat, lav prioritet |
+| Datafordeler DAR | Adresse → BFE | Ikke nødvendig når BFE kendes |
+| Datafordeler BBR | Bygningsdata (punkter, ikke omrids) | Ikke brugt: omrids kommer fra GeoDanmark |
 | Kommerciel SAR (Umbra m.fl.) | Mulig forbedring af belægning | Kun hvis 85 % ikke nås |
-| OpenStreetMap | Kontrol- og træningsdata | Valgfri |
-| ESA WorldCover | Baseline at sammenligne med | Valgfri |
-| GeoDanmark vektor | Maske og kontrol | Valgfri |
 | Google Maps, Esri, Google 3D | Kun visning | Fravalgt til analyse (licens) |
 
 ## Matriklen: afgrænsning af ejendommen
 
 - Kort: https://www.matriklen.dk/kort/sfe/5522814
-- **BFE-nummeret er projektets primære nøgle.** Det identificerer ejendommen (SFE), og alle jordstykker under BFE-nummeret udgør tilsammen det areal, vi analyserer.
-- Adressen bruges kun til at finde BFE-nummeret. En adresse som "Sct Hubertus Vej 6–72" dækker mange husnumre, men de hører under samme BFE.
-- Hentes via Datafordeler (MAT), så vi ikke skal klikke i UI.
+- **BFE-nummeret er projektets primære nøgle.** Arealer beregnes kun inden for ejendommens polygon. Pipelinen stopper, hvis polygonen ikke kan hentes (eller gives med `--omraade`).
+- `MAT_SamletFastEjendom` har ejendommens samlede polygon (`geometri { wkt }`, EPSG:25832). For en samlet fast ejendom er `id_lokalId` lig med BFE-nummeret.
+- Kontrol for testcasen: polygonen giver 6.234 m², matriklen oplyser 6.232 m² (ét jordstykke).
+- Andre MAT-entiteter: `MAT_Jordstykke` (matrikelnummer, registreret areal, vejareal), `MAT_JordstykkeTemaflade` (fredskov, strandbeskyttelse, klitfredning m.m. som polygoner), `MAT_OptagetVej`.
 
-## Datafordeler: adresser (DAR) og matrikel (MAT)
+## Datafordeler: GraphQL og WFS
 
-GraphQL-endpoint fra vores Postman:
+GraphQL (fra vores Postman):
 
 ```
-https://graphql.datafordeler.dk/DAR/{{darVersion}}?apiKey={{apiKey}}
-https://graphql.datafordeler.dk/BBR/{{bbrVersion}}?apiKey={{apiKey}}
-https://graphql.datafordeler.dk/MAT/{{matVersion}}?apiKey={{apiKey}}
+https://graphql.datafordeler.dk/<REGISTER>/<version>?apiKey=<nøgle>
 ```
 
-- API-nøgle og versioner (DAR, BBR, MAT) ligger i `.env` (se `PROJEKT.md`). Nøglen må aldrig committes.
-- MAT (primær): BFE-nummer → alle jordstykker og deres polygoner. Det er analyseområdet.
-- DAR (hjælp): adresse → husnummer → jordstykke → BFE-nummer, når vi kun kender adressen.
-- BBR (valgfrit): bygninger og deres footprints, som maske.
+- Virkende versioner (testet 2026-10-07): MAT v2 og v3, BBR v2 og v3, GEODKV v2, DAR v3 (fra Postman).
+- Skemaer kan hentes uden nøgle: `https://datafordeler.dk/GraphQLSchema/<REGISTER>.graphql` (MAT, BBR, DAR, GEODKV).
+- **Begrænsning:** alle GraphQL-forespørgsler skal filtrere på `id_lokalId` (eller `datafordelerRowId`) og angive `virkningstid` eller `registreringstid`. Man kan altså ikke søge "alle bygninger i dette område" via GraphQL.
+- Rumlige opslag går derfor via WFS: `https://wfs.datafordeler.dk/GEODKV/GEODKV_WFS/1.0.0/WFS?apikey=<nøgle>` (WFS 2.0, GeoJSON-output, bbox i EPSG:25832). Pipelinen slår typenavnene op i GetCapabilities.
+- De gamle WFS-tjenester (`GeoDanmark60_NOHIST_GML3` m.fl. og Dataforsyningens `*_DAF`-WFS) lukkede 1. juli 2026.
+- DAWA (`api.dataforsyningen.dk/adresser`, `/jordstykker`) er lukket og svarer 410 Gone.
+- API-nøgle og versioner ligger i `.env`. Nøglen må aldrig committes.
+
+## GeoDanmark vektor
+
+Landsdækkende kortdata (GeoDanmark 6.0, 63 objekttyper), opdateret af kommunerne og Klimadatastyrelsen. Det er sikkert de samme bygningsomrids, som kort.bbr.dk viser.
+
+Relevante objekttyper og hvordan pipelinen bruger dem:
+
+| Objekttype | Geometri | Brug | Fundet på testcasen |
+|---|---|---|---|
+| `Bygning` | Flade | Bygningsmaske (autoritativ) | 26 |
+| `Trae` | Punkt | Træ (3 m radius) | 39 |
+| `Traegruppe` | Flade | Træer | 1 |
+| `Skov` | Flade | Træer | 1 |
+| `KratBevoksning` | Flade | Buske | 0 |
+| `Parkering`, `Plads` | Flade | Belægning | 1 / 0 |
+| `Vejkant` | Linje | Kun visning (kontrol af belægning) | 23 |
+| `Hegn` | Linje | Kun visning (kan være hæk eller fast hegn) | 74 |
+| `Sportsbane`, `RekreativtOmraade`, `Bassin`, `Soe` | Flade | Kun visning | 0 |
+
+Fuld liste: https://grunddatamodel.datafordeler.dk/objekttypekatalog/GeoDanmark/package-summary.html
+
+## Ortofoto (Dataforsyningen)
+
+- WMS: `https://api.dataforsyningen.dk/orto_foraar_DAF?token=<token>`. GetCapabilities virker uden token, billeder kræver token.
+- Lag pr. år: `geodanmark_<år>_12_5cm` (RGB) og `geodanmark_<år>_12_5cm_cir` (nær-infrarød, rød, grøn). Årgange 2015–2025.
+- CIR-laget giver vegetationsindeks (NDVI) i 12,5 cm. Det er vores vigtigste kilde til græs/belægning.
+- **Vigtigt:** det er forårsfotos. Løvtræer er uden blade og har derfor lavt vegetationsindeks. Højdemodellen skal afgøre, om noget er et træ.
+- Skygger fra bygninger gør vegetationsindekset usikkert. Flere årgange og sommerdata (Sentinel-2) kan hjælpe.
+
+## Danmarks Højdemodel (Dataforsyningen)
+
+- WCS 1.0.0: `https://api.dataforsyningen.dk/dhm_wcs_DAF?token=<token>`, coverages `dhm_terraen` og `dhm_overflade` (0,4 m).
+- Overflade minus terræn = højde over terræn. Græs < 0,5 m, buske 0,5–3 m, træer > 3 m.
+- **Punktsky (kandidat):** laserpunkterne er klassificeret (terræn, lav/mellem/høj vegetation, bygning). Kan give træer og buske direkte, også under løvfri forhold. Hentes som filer, ikke via WCS. Årgang og punkttæthed skal tjekkes.
+
+## Andre danske offentlige kilder
+
+- **Skråfoto-API (Dataforsyningen):** skråfotos fra fire retninger. Kontrol af fx belægningstype under træer.
+- **Fotoindex (Dataforsyningen, lag `fotoindex_<år>`):** optagetidspunkt for ortofotoet. Skal med i `run.json`.
+- **Danmarks Arealinformation (Miljøportalen):** § 3-beskyttet natur, fredskov m.m. Relevant for drift, ikke for klassificering. https://miljoeportal.dk/en/danmarks-miljoeportal-s-systems/danmarks-arealinformation
+- **Basemap04 (DCE, Aarhus Universitet):** arealanvendelse i 10 m-raster. Groft, men kan bruges som baseline ved siden af WorldCover. https://envs.au.dk/en/research-areas/society-environment-and-resources/land-use-and-gis/basemap
+- **Plandata.dk:** lokalplaner, fx krav om grønne arealer.
+- **BBR:** bygningsdata som punkter og attributter (anvendelse, areal). Omridsene ligger i GeoDanmark, ikke i BBR.
 
 ## Baggrundskort
 
-- **Forvaltningskort** (målet er at kunne levere et forvaltningskort til kunden)
-- **Ortofoto, flere år** (Dataforsyningen, ca. 12,5 cm opløsning). Flere årgange gør klassificeringen mere robust og viser ændringer over tid.
+- **Forvaltningskort** (målet er at kunne levere et forvaltningskort til kunden).
 
 ## Skråfotos
 
@@ -66,7 +113,9 @@ https://graphql.datafordeler.dk/MAT/{{matVersion}}?apiKey={{apiKey}}
 
 - Browser: https://browser.dataspace.copernicus.eu/?zoom=18&lat=57.46045&lng=9.97442&themeId=DEFAULT-THEME&datasetId=S2_L2A_CDAS&cloudCoverage=30&dateMode=SINGLE&panel=layers
 - Beslutning: vi henter **alle** lag, som Copernicus kan levere for analyseområdet. Så kan vi bagefter måle, hvilke lag der faktisk hjælper klassificeringen.
-- Adgang: gratis konto på Copernicus Data Space Ecosystem (CDSE) med OAuth-klient. Hentes via Sentinel Hub Process API (eller openEO/STAC). Der er en månedlig kvote.
+- Adgang: gratis konto på Copernicus Data Space Ecosystem (CDSE) med OAuth-klient. Hentes via Sentinel Hub Process API (eller openEO/STAC).
+- Kvote for gratis konto: 10.000 requests og 10.000 processing units pr. måned, 300 af hver pr. minut. Der er ingen betaling: når kvoten er brugt, afvises kald til næste måned. Mere kvote kræver køb af "commercial cloud credits". https://documentation.dataspace.copernicus.eu/Quotas.html
+- Pipelinen skal have et loft over kald pr. run og logge forbruget i `run.json`.
 - Opløsningen er 10 m eller grovere. Én pixel er 100 m² eller mere. Satellitlagene kan derfor ikke tegne grænsen mellem græs og belægning på en boligafdeling. De bruges som støtte: sæson, vegetationssundhed, fugt og ændringer over tid. Ortofoto og højdemodel er hovedkilderne.
 
 **Sentinel-satellitter**
@@ -90,6 +139,8 @@ https://graphql.datafordeler.dk/MAT/{{matVersion}}?apiKey={{apiKey}}
 | CLMS Small Woody Features | Hække, trærækker, småbeplantning | 5 m | Middel: buske og hække |
 | CLMS Urban Atlas / CORINE / CLC+ | Arealanvendelse | 10 m–100 m | Lav: grov baggrund |
 | CLMS HR-VPP | Vegetationsfænologi (vækstsæson) | 10 m | Middel: skelner græs fra træer via sæsonmønster |
+
+Earth Search (AWS) leverer Sentinel-2 L2A uden nøgle og bruges allerede. CDSE er derfor kun nødvendig for de øvrige lag.
 
 Hvilke CLMS-produkter der findes for Danmark og i hvilken version, skal tjekkes i CDSE-kataloget, før vi koder mod dem.
 
@@ -134,18 +185,17 @@ Forken [Gaia Earth View](https://wiki.p2pfoundation.net/Gaia_Earth_View) tilføj
 Andre åbne kilder, der er værd at tilføje:
 
 - **ESA WorldCover** (10 m, CC BY 4.0): global arealdække med klasserne træ, busk, græs og befæstet. God som baseline at sammenligne vores resultat med.
-- **Danmarks Højdemodel** (se næste afsnit): den vigtigste ekstra kilde.
+- **Danmarks Højdemodel**: se afsnittet ovenfor. Den vigtigste ekstra kilde.
 - **GeoDanmark vektordata** (Dataforsyningen): bygninger, vejkanter og andre tekniske flader som maske og kontrol.
-
-## Forslag: højdemodel (DHM)
-
-- Danmarks Højdemodel (overflademodel minus terrænmodel) giver højden på det, der står på jorden.
-- Det er den nemmeste måde at skelne **græs** (lav) fra **buske** (0,5–3 m) og **træer** (> 3 m).
 
 ## Research-links
 
-Brugt til gennemgangen 2026-10-07:
+Brugt 2026-10-07:
 
+- Datafordeler GraphQL-skemaer: https://datafordeler.dk/GraphQLSchema/MAT.graphql (og BBR, DAR, GEODKV)
+- GeoDanmark Vektor WFS-entiteter: https://datafordeler.dk/dataoversigt/geodanmark-vektor/geodanmark-vektor-wfs-entiteter/
+- Lukning af DAF-WFS: https://dataforsyningen.dk/news/5124
+- CDSE-kvoter: https://documentation.dataspace.copernicus.eu/Quotas.html
 - God's Eye View: https://github.com/bilawalsidhu/gods-eye-view (README og DATA_SOURCES.md)
 - Gaia Earth View: https://wiki.p2pfoundation.net/Gaia_Earth_View
 - CDSE, datasæt: https://documentation.dataspace.copernicus.eu/Data.html

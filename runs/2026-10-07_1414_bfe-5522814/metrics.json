@@ -1,0 +1,21 @@
+{
+  "arealer_m2": {
+    "Belægning": 3240.8,
+    "Græs": 317.3,
+    "Buske": 157.8,
+    "Træer": 136.0,
+    "Bygning": 2382.6,
+    "Ukendt": 0.0,
+    "Udeareal i alt": 3851.9
+  },
+  "polygoner": 255,
+  "overensstemmelse_geodanmark": {
+    "sammenlignet_med": "GeoDanmark (ikke facit)",
+    "pr_klasse_pct": {
+      "Belægning": 87.4,
+      "Træer": 8.0,
+      "Bygning": 100.0
+    },
+    "samlet_pct": 74.9
+  }
+}

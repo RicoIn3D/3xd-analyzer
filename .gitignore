@@ -1,2 +1,4 @@
 .env
 runs/*/data/
+.venv/
+__pycache__/

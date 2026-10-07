@@ -1,0 +1,22 @@
+{
+  "arealer_m2": {
+    "Belægning": 5120.0,
+    "Græs": 40276.0,
+    "Buske": 0.0,
+    "Træer": 98694.0,
+    "Bygning": 15910.0,
+    "Ukendt": 0.0,
+    "Udeareal i alt": 144090.0
+  },
+  "polygoner": 179,
+  "overensstemmelse_osm": {
+    "sammenlignet_med": "OpenStreetMap (ikke facit)",
+    "pr_klasse_pct": {
+      "Belægning": 3.5,
+      "Buske": 0.0,
+      "Træer": 98.5,
+      "Bygning": 96.8
+    },
+    "samlet_pct": 68.6
+  }
+}

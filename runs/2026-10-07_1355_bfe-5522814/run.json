@@ -1,0 +1,87 @@
+{
+  "run": "2026-10-07_1355_bfe-5522814",
+  "tidspunkt": "2026-10-07T13:55:46",
+  "analyzier_version": "0.1.0",
+  "git_commit": null,
+  "bfe": "5522814",
+  "omraade": "firkant 400x400 m omkring 558376,6369071 (matrikel ikke hentet)",
+  "grid": {
+    "crs": "EPSG:25832",
+    "bbox": [
+      558176.0,
+      6368871.0,
+      558576.0,
+      6369271.0
+    ],
+    "opløsning_m": 1.0,
+    "pixels": [
+      400,
+      400
+    ]
+  },
+  "metode": "sentinel2",
+  "parametre": {
+    "ndvi_vegetation": 0.45,
+    "median_filter_px": 3
+  },
+  "note": "Run uden nøgler: Sentinel-2 + WorldCover + OSM",
+  "kilder": [
+    {
+      "navn": "Datafordeler MAT: jordstykker for BFE 5522814",
+      "status": "sprunget over",
+      "note": "DATAFORDELER_API_KEY eller DATAFORDELER_MAT_VERSION mangler i .env"
+    },
+    {
+      "navn": "OpenStreetMap (Overpass)",
+      "status": "ok"
+    },
+    {
+      "navn": "Dataforsyningen (ortofoto + DHM)",
+      "status": "sprunget over",
+      "note": "DATAFORSYNINGEN_TOKEN mangler i .env. Hovedkilderne er derfor ikke med"
+    },
+    {
+      "navn": "Sentinel-2 L2A (Earth Search, AWS)",
+      "status": "ok",
+      "scener": [
+        {
+          "id": "S2A_32VNJ_20250818_0_L2A",
+          "dato": "2025-08-18",
+          "skydække_%": 0.013397
+        },
+        {
+          "id": "S2B_32VNJ_20240627_0_L2A",
+          "dato": "2024-06-27",
+          "skydække_%": 0.070049
+        },
+        {
+          "id": "S2C_32VNJ_20250630_0_L2A",
+          "dato": "2025-06-30",
+          "skydække_%": 0.116144
+        },
+        {
+          "id": "S2A_32VNJ_20240625_0_L2A",
+          "dato": "2024-06-25",
+          "skydække_%": 0.553893
+        }
+      ]
+    },
+    {
+      "navn": "ESA WorldCover 2021 (10 m)",
+      "status": "ok"
+    },
+    {
+      "navn": "Copernicus Data Space (øvrige lag)",
+      "status": "sprunget over",
+      "note": "CDSE_CLIENT_ID/SECRET mangler i .env. Kun Sentinel-2 hentet via Earth Search"
+    }
+  ],
+  "argumenter": {
+    "bfe": "5522814",
+    "center": "558376,6369071",
+    "size": 400.0,
+    "orto_years": "2025,2024,2023",
+    "s2_years": "2025,2024",
+    "note": "Run uden nøgler: Sentinel-2 + WorldCover + OSM"
+  }
+}

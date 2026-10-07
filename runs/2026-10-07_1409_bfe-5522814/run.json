@@ -1,0 +1,109 @@
+{
+  "run": "2026-10-07_1409_bfe-5522814",
+  "tidspunkt": "2026-10-07T14:09:59",
+  "analyzier_version": "0.1.0",
+  "git_commit": null,
+  "bfe": "5522814",
+  "omraade": "matrikel (samlet fast ejendom)",
+  "gyldigt_areal": true,
+  "ejendom_areal_m2": 6234.3,
+  "grid": {
+    "crs": "EPSG:25832",
+    "bbox": [
+      558341.657,
+      6369001.503,
+      558451.431,
+      6369148.182
+    ],
+    "opløsning_m": 1.0,
+    "pixels": [
+      110,
+      147
+    ]
+  },
+  "metode": "sentinel2",
+  "parametre": {
+    "ndvi_vegetation": 0.45,
+    "median_filter_px": 3
+  },
+  "note": "Ortofoto CIR + DHM + GeoDanmark, afgrænset til matriklen",
+  "kilder": [
+    {
+      "navn": "Datafordeler MAT: samlet fast ejendom 5522814",
+      "status": "ok"
+    },
+    {
+      "navn": "OpenStreetMap (Overpass)",
+      "status": "ok"
+    },
+    {
+      "navn": "GeoDanmark vektor (Datafordeler WFS)",
+      "status": "ok",
+      "objekter": {
+        "Bygning": 26,
+        "Trae": 39,
+        "Traegruppe": 1,
+        "Parkering": 1,
+        "Plads": 0,
+        "KratBevoksning": 0,
+        "Skov": 1,
+        "Vejkant": 23,
+        "Hegn": 74,
+        "Sportsbane": 0,
+        "RekreativtOmraade": 0,
+        "Bassin": 0,
+        "Soe": 0
+      }
+    },
+    {
+      "navn": "Dataforsyningen (ortofoto + DHM)",
+      "status": "sprunget over",
+      "note": "DATAFORSYNINGEN_TOKEN mangler i .env. Hovedkilderne er derfor ikke med"
+    },
+    {
+      "navn": "Sentinel-2 L2A (Earth Search, AWS)",
+      "status": "ok",
+      "scener": [
+        {
+          "id": "S2A_32VNJ_20250818_0_L2A",
+          "dato": "2025-08-18",
+          "skydække_%": 0.013397
+        },
+        {
+          "id": "S2B_32VNJ_20240627_0_L2A",
+          "dato": "2024-06-27",
+          "skydække_%": 0.070049
+        },
+        {
+          "id": "S2C_32VNJ_20250630_0_L2A",
+          "dato": "2025-06-30",
+          "skydække_%": 0.116144
+        },
+        {
+          "id": "S2A_32VNJ_20240625_0_L2A",
+          "dato": "2024-06-25",
+          "skydække_%": 0.553893
+        }
+      ]
+    },
+    {
+      "navn": "ESA WorldCover 2021 (10 m)",
+      "status": "ok"
+    },
+    {
+      "navn": "Copernicus Data Space (øvrige lag)",
+      "status": "sprunget over",
+      "note": "CDSE_CLIENT_ID/SECRET mangler i .env. Kun Sentinel-2 hentet via Earth Search"
+    }
+  ],
+  "argumenter": {
+    "bfe": "5522814",
+    "omraade": null,
+    "uden_matrikel": false,
+    "center": null,
+    "size": 200,
+    "orto_years": "2025,2024,2023",
+    "s2_years": "2025,2024",
+    "note": "Ortofoto CIR + DHM + GeoDanmark, afgrænset til matriklen"
+  }
+}
