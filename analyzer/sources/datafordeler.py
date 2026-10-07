@@ -1,4 +1,4 @@
-"""Datafordeler: property area (MAT, GraphQL) and GeoDanmark vector data (WFS).
+"""Datafordeler: property area (MAT, GraphQL), building attributes (BBR, GraphQL) and GeoDanmark vector data (WFS).
 
 GraphQL schemas: https://datafordeler.dk/GraphQLSchema/<REGISTER>.graphql
 Every GraphQL entity query must filter on id_lokalId (or datafordelerRowId) and pass
@@ -32,6 +32,20 @@ query ($bfe: String!, $t: DafDateTime!) {
   }
 }
 """
+
+# BBR buildings are looked up by id_lokalId, which GeoDanmark buildings carry as BBRUUID.
+# Passing both virkningstid and registreringstid returns only the current version of each building.
+BBR_QUERY = """
+query ($ids: [String!], $t: DafDateTime!) {
+  BBR_Bygning(first: 100, virkningstid: $t, registreringstid: $t, where: { id_lokalId: { in: $ids } }) {
+    nodes {
+      id_lokalId status byg021BygningensAnvendelse byg026Opfoerelsesaar byg027OmTilbygningsaar
+      byg032YdervaeggensMateriale byg033Tagdaekningsmateriale byg041BebyggetAreal byg054AntalEtager
+    }
+  }
+}
+"""
+BBR_MAX_IDS = 100  # list filters are capped at 100 values
 
 # GeoDanmark entities used in the run: entity -> (class or None, buffer in metres for points/lines, priority)
 GEODANMARK_ENTITIES = {
@@ -80,14 +94,32 @@ def query(register: str, gql: str, variables: dict) -> dict:
     return body["data"]
 
 
+def _now() -> str:
+    return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000000Z")
+
+
 def property_area(bfe: str):
     """Return the samlet fast ejendom as a shapely geometry in EPSG:25832."""
-    now = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000000Z")
-    nodes = query("MAT", SFE_QUERY, {"bfe": str(bfe), "t": now})["MAT_SamletFastEjendom"]["nodes"]
+    nodes = query("MAT", SFE_QUERY, {"bfe": str(bfe), "t": _now()})["MAT_SamletFastEjendom"]["nodes"]
     geoms = [wkt.loads(n["geometri"]["wkt"]) for n in nodes if n.get("geometri")]
     if not geoms:
         raise SourceUnavailable(f"MAT: ingen samlet fast ejendom med lokalId {bfe}")
     return unary_union(geoms)
+
+
+def bbr_buildings(ids: list[str]) -> dict:
+    """Return the current BBR record for each building id (BBRUUID), keyed by id."""
+    if not ids:
+        raise SourceUnavailable("Ingen GeoDanmark-bygninger med BBR-reference")
+    unique = sorted(set(ids))
+    result = {}
+    for i in range(0, len(unique), BBR_MAX_IDS):
+        batch = unique[i:i + BBR_MAX_IDS]
+        for n in query("BBR", BBR_QUERY, {"ids": batch, "t": _now()})["BBR_Bygning"]["nodes"]:
+            result[n["id_lokalId"]] = n
+    if not result:
+        raise SourceUnavailable(f"BBR: ingen af {len(unique)} bygninger fundet")
+    return result
 
 
 # ---------- GeoDanmark WFS ----------
@@ -116,7 +148,7 @@ def geodanmark(grid: Grid) -> dict:
     key = _api_key()
     types = _feature_types(key)
     bbox = ",".join(f"{v:.2f}" for v in grid.bbox) + f",{CRS}"
-    shapes, features, counts, missing = [], [], {}, []
+    shapes, features, counts, missing, buildings = [], [], {}, [], []
     for entity, (cls, buf, prio) in GEODANMARK_ENTITIES.items():
         type_name = _pick(types, entity)
         if not type_name:
@@ -133,6 +165,8 @@ def geodanmark(grid: Grid) -> dict:
             if not f.get("geometry"):
                 continue
             geom = force_2d(shape(f["geometry"]))
+            if entity == "Bygning":
+                buildings.append({"geom": geom, "properties": f.get("properties") or {}})
             features.append({"type": "Feature", "geometry": mapping(transform(_to_wgs84, geom)),
                              "properties": {"objekttype": entity, **{k: v for k, v in (f.get("properties") or {}).items()
                                                                      if isinstance(v, (str, int, float, bool))}}})
@@ -149,4 +183,4 @@ def geodanmark(grid: Grid) -> dict:
         raster = rasterize(((g, c) for _, g, c in shapes), out_shape=grid.shape,
                            transform=grid.transform, fill=0, dtype="uint8")
     return {"klasser": raster, "geojson": {"type": "FeatureCollection", "features": features},
-            "antal": counts, "mangler": missing}
+            "antal": counts, "mangler": missing, "bygninger": buildings}

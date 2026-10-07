@@ -31,12 +31,13 @@ Kræver `.env` (skabelon i `.env.example`). Uden `DATAFORSYNINGEN_TOKEN` falder 
 - `analyzer/classify.py`: regelbaserede metoder. `DEFAULTS` holder alle parametre pr. metode, og de skrives i `run.json`. Metoden vælges ud fra tilgængelige data:
   - `ortho_dhm` (hovedmetode): NDVI fra CIR-ortofoto + nDSM (DHM overflade minus terræn). Punktskyens ASPRS-vegetationsklasser afgør træer/buske, når den findes. Bygningsmaske fra GeoDanmark, OSM som fallback.
   - `sentinel2` (fallback uden token): Sentinel-2 NDVI + ESA WorldCover.
+- `analyzer/buildings.py`: bygninger på ejendommen (fra v0.4). GeoDanmark-omrids kobles til BBR via `BBRUUID` (tagmateriale, ydervæg, anvendelse, år). Tagform, hældning, tagareal og højde beregnes fra DHM overflade. Kun celler med bygningspunkter i punktskyen (klasse 6) bruges, så træer over tag springes over. Højde måles mod terræn i en ring uden for omridset, fordi DTM er interpoleret under bygninger. Output: `bygninger.csv`, `bygninger.geojson`, lag `tagmateriale.png` og hover i viewer.
 - `analyzer/classes.py`: klassekoder i `klasser.tif`. `0 = UDENFOR` (uden for ejendommen). `BYGNING` tæller ikke som udeareal (`OUTDOOR`).
 - `analyzer/outputs.py`: GeoTIFF, GeoJSON-polygoner, CSV, PNG-lag og den selvstændige `viewer.html`. `LAYER_INFO` og legender til viewer-lagene ligger her. Funktionerne `agreement()` (mod GeoDanmark/OSM, ikke facit) og `accuracy()` (mod `runs/reference/bfe-<nr>.geojson`) beregner metrics.
 
 ## Runs
 
-- Hver kørsel skriver `runs/<YYYY-MM-DD_HHMM>_bfe-<nr>/`. Run-mappen committes. `data/` i run-mappen er git-ignoreret.
+- Hver kørsel skriver `runs/<YYYY-MM-DD_HHMM>_bfe-<nr>/`. `runs/` er git-ignoreret og ligger kun lokalt, undtagen `runs/_skabelon/` (bruges af `run.py`) og `runs/reference/` (facit).
 - `run.json` skal gøre en run reproducerbar: version (`analyzer/__init__.py` `VERSION`), git-commit, parametre, kilder med årgang/datoer. Bump `VERSION` ved ændring af metode eller parametre.
 - Fejltekster passerer `redact()`, før de skrives til run-filer eller `runs/DRIFTSLOG.md`. Brug den også i nye skrivesteder, da URL'er kan indeholde nøgler.
 - `runs/DRIFTSLOG.md` får automatisk en linje ved problemer med datakilder (fx Overpass).

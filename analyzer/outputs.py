@@ -233,12 +233,14 @@ def accuracy(classes: np.ndarray, ref: np.ndarray) -> dict:
 # ---------- Viewer ----------
 
 def write_viewer(path: Path, title: str, grid: Grid, layers: list[dict], area: dict, run_info: dict,
-                 rasters: dict | None = None) -> None:
+                 rasters: dict | None = None, buildings: list | None = None,
+                 building_summary: dict | None = None) -> None:
     legend = [{"navn": NAMES[c], "farve": "#%02x%02x%02x" % COLORS[c]} for c in NAMES]
     html = VIEWER_TEMPLATE.replace("__TITLE__", title).replace("__DATA__", json.dumps({
         "width": grid.width, "height": grid.height, "res": grid.res,
         "layers": layers, "areas": area, "legend": legend, "run": run_info,
         "rasters": {k: encode_raster(v, k) for k, v in (rasters or {}).items()},
+        "buildings": buildings or [], "buildingSummary": building_summary,
     }, ensure_ascii=False))
     path.write_text(html, encoding="utf-8")
 
@@ -297,6 +299,10 @@ VIEWER_TEMPLATE = """<!doctype html>
   <label class="muted">Gennemsigtighed for lag</label>
   <input type="range" id="opacity" min="0" max="100" value="60">
   <h2>Arealer</h2><table id="areas"></table>
+  <div id="bld-sec" hidden><h2>Bygninger og tage</h2><div class="muted" id="bld-meta"></div>
+  <table id="bld-mat"></table><table id="bld-form" style="margin-top:8px"></table>
+  <div class="muted" style="margin-top:6px">Alle bygninger: <code>output/bygninger.csv</code>. Hold musen over en
+  bygning med laget "tagmateriale" tændt.</div></div>
   <div id="skraa-sec" hidden><h2>Skråfotos</h2><div id="skraa" class="gallery"></div>
   <div class="muted">Magenta linje = ejendomsgrænsen. Klik for stort billede.</div></div>
   <h2>Kilder</h2><ul id="sources" class="muted"></ul>
@@ -344,6 +350,13 @@ function renderLegends() {
     const g = l.legende, span = g.max - g.min, fmt = v => v.toLocaleString('da-DK') + (g.enhed ? ' ' + g.enhed : '');
     const box = document.createElement('div'); box.className = 'legend';
     const t = document.createElement('b'); t.textContent = g.titel;
+    if (g.kategorier) {
+      box.append(t);
+      for (const k of g.kategorier) { const d = document.createElement('div'); d.className = 'muted';
+        d.innerHTML = `<span class="sw" style="background:${k.farve}"></span>`; d.append(k.navn); box.append(d); }
+      box.append(Object.assign(document.createElement('div'), { className: 'muted', textContent: g.note }));
+      el.append(box); continue;
+    }
     if (g.info) { t.title = g.info; t.style.cursor = 'help';
       t.append(Object.assign(document.createElement('span'), { className: 'i', textContent: 'i' })); }
     const why = g.info ? Object.assign(document.createElement('div'), { className: 'muted', textContent: g.info }) : null;
@@ -357,14 +370,28 @@ function renderLegends() {
 }
 renderLegends();
 const decode = b => b ? Uint8Array.from(atob(b), c => c.charCodeAt(0)) : null;
-const R = { hoejde: decode(D.rasters.hoejde), ndvi: decode(D.rasters.ndvi), klasse: decode(D.rasters.klasse) };
+const R = { hoejde: decode(D.rasters.hoejde), ndvi: decode(D.rasters.ndvi), klasse: decode(D.rasters.klasse),
+            bygning: decode(D.rasters.bygning) };
+const bldByNr = Object.fromEntries(D.buildings.map(b => [b.nr, b]));
+const num = v => v == null ? '?' : v.toLocaleString('da-DK');
+function bldText(b) {
+  const p = [`Bygning ${b.nr}`];
+  if (b.anvendelse) p.push(b.anvendelse + (b.opfoerelsesaar ? ` (${b.opfoerelsesaar})` : ''));
+  p.push('tag: ' + (b.tagmateriale || 'ingen BBR'));
+  if (b.tagform) p.push(b.tagform + (b.tagform !== 'fladt' && b.taghaeldning_grader != null ? ` ${num(b.taghaeldning_grader)}°` : ''));
+  if (b.tagareal_m2) p.push(`tagareal ${num(b.tagareal_m2)} m²`);
+  if (b.hoejde_max_m != null) p.push(`højde ${num(b.hoejde_max_m)} m`);
+  if (b.mulig_asbest) p.push('MULIG ASBEST');
+  return p.join(' · ');
+}
 const classNames = Object.fromEntries(D.legend.map((x, i) => [i + 1, x.navn]));
 const ro = document.getElementById('readout');
 map.on('mousemove', e => {
   const row = Math.floor(D.height - e.latlng.lat), col = Math.floor(e.latlng.lng);
   if (row < 0 || col < 0 || row >= D.height || col >= D.width) { ro.hidden = true; return; }
   const i = row * D.width + col, parts = [];
-  if (R.klasse) parts.push(classNames[R.klasse[i]] || 'Uden for ejendommen');
+  if (R.bygning && R.bygning[i] && bldByNr[R.bygning[i]]) parts.push(bldText(bldByNr[R.bygning[i]]));
+  else if (R.klasse) parts.push(classNames[R.klasse[i]] || 'Uden for ejendommen');
   if (R.hoejde && R.hoejde[i] !== 255) parts.push('Højde ' + (R.hoejde[i] / 10).toLocaleString('da-DK', { minimumFractionDigits: 1 }) + ' m');
   if (R.ndvi && R.ndvi[i] !== 255) parts.push('NDVI (grønhed) ' + (R.ndvi[i] / 127 - 1).toLocaleString('da-DK', { maximumFractionDigits: 2 }));
   ro.textContent = parts.join(' · '); ro.hidden = parts.length === 0;
@@ -392,6 +419,24 @@ if (D.run.skraafoto && D.run.skraafoto.length) {
     const cap = document.createElement('div'); cap.textContent = `${b.navn} · ${b.dato}`;
     a.append(img, cap); g.append(a);
   }
+}
+if (D.buildingSummary) {
+  const S = D.buildingSummary;
+  document.getElementById('bld-sec').hidden = false;
+  document.getElementById('bld-meta').textContent = `${S.antal} bygninger på ejendommen, ${S.med_bbr} med BBR-data`
+    + (S.mulig_asbest ? `. ${S.mulig_asbest} med mulig asbest (fibercement før 1986)` : '')
+    + '. Tagareal er beregnet ud fra hældningen.';
+  const fill = (id, head, groups) => {
+    const t = document.getElementById(id);
+    t.insertAdjacentHTML('beforeend', `<tr><td><b>${head}</b></td><td class="n"><b>Antal</b></td><td class="n"><b>Tagareal</b></td></tr>`);
+    for (const [k, g] of Object.entries(groups)) {
+      const tr = document.createElement('tr'), a = document.createElement('td'); a.textContent = k;
+      tr.append(a); tr.insertAdjacentHTML('beforeend', `<td class="n">${g.antal}</td><td class="n">${num(g.tagareal_m2)} m²</td>`);
+      t.append(tr);
+    }
+  };
+  fill('bld-mat', 'Tagmateriale', S.pr_tagmateriale);
+  fill('bld-form', 'Tagform (beregnet)', S.pr_tagform);
 }
 const src = document.getElementById('sources');
 for (const s of D.run.kilder) {

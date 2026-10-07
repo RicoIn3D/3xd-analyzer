@@ -26,7 +26,7 @@ Overblik (status pr. 2026-10-07, efter første run med rigtige data):
 | Overture Maps, Meta/WRI Canopy Height, Mapillary | Kontrol og belægningstype | Kandidat (se nederst) |
 | Danmarks Arealinformation, Basemap04, Plandata | Baggrund | Kandidat, lav prioritet |
 | Datafordeler DAR | Adresse → BFE | Ikke nødvendig når BFE kendes |
-| Datafordeler BBR | Bygningsdata (punkter, ikke omrids) | Ikke brugt: omrids kommer fra GeoDanmark |
+| Datafordeler BBR (`BBR_Bygning`) | Tagmateriale, ydervæg, anvendelse, opførelsesår pr. bygning | I brug fra v0.4, virker. Kobles via `BBRUUID` på GeoDanmark-bygningen |
 | Kommerciel SAR (Umbra m.fl.) | Mulig forbedring af belægning | Kun hvis 85 % ikke nås |
 | Google Maps, Esri, Google 3D | Kun visning | Fravalgt til analyse (licens) |
 
@@ -105,7 +105,7 @@ Fuld liste: https://grunddatamodel.datafordeler.dk/objekttypekatalog/GeoDanmark/
 - **Danmarks Arealinformation (Miljøportalen):** § 3-beskyttet natur, fredskov m.m. Relevant for drift, ikke for klassificering. https://miljoeportal.dk/en/danmarks-miljoeportal-s-systems/danmarks-arealinformation
 - **Basemap04 (DCE, Aarhus Universitet):** arealanvendelse i 10 m-raster. Groft, men kan bruges som baseline ved siden af WorldCover. https://envs.au.dk/en/research-areas/society-environment-and-resources/land-use-and-gis/basemap
 - **Plandata.dk:** lokalplaner, fx krav om grønne arealer.
-- **BBR:** bygningsdata som punkter og attributter (anvendelse, areal). Omridsene ligger i GeoDanmark, ikke i BBR.
+- **BBR:** bygningsdata som attributter (anvendelse, tagmateriale `byg033`, ydervæg `byg032`, opførelsesår, bebygget areal). Omridsene ligger i GeoDanmark, ikke i BBR. GeoDanmark-bygningen har feltet `BBRUUID`, som er BBR-bygningens `id_lokalId`. Pipelinen slår op med `id_lokalId: { in: [...] }` (højst 100 pr. kald) og sender både `virkningstid` og `registreringstid`, så kun den gældende version kommer med. Testcasen: 8 bygninger på ejendommen, alle med BBR-data. Tagform, hældning og højde står ikke i BBR; dem beregner pipelinen ud fra DHM overflade og punktskyen.
 
 ## Baggrundskort
 

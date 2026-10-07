@@ -80,7 +80,7 @@ runs/
 
 - Navngivning: `<dato>_<tid>_bfe-<BFE-nummer>`.
 - `run.json` skal gøre en run reproducerbar: git-commit, metode og version, alle parametre, og for hver kilde: hvilken årgang, optagelsesdato og version der blev brugt.
-- `data/` står i `.gitignore`. Resten af run-mappen committes, så historikken bevares.
+- `runs/` står i `.gitignore` (fra 2026-10-07). Runs ligger kun lokalt. Undtaget: `runs/_skabelon/` og `runs/reference/` (facit).
 
 ### Evaluering, trin 1: Ricos vurdering
 

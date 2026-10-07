@@ -21,6 +21,7 @@ from shapely.geometry import shape
 from shapely.ops import transform as shapely_transform, unary_union
 
 from . import VERSION, classify, outputs
+from . import buildings as bldg
 from .classes import BYGNING, NAMES, UDENFOR
 from .grid import Grid
 from .sources import SourceUnavailable, dataforsyningen, datafordeler, open_rasters, osm, punktsky, skraafoto
@@ -179,6 +180,7 @@ def main() -> None:
     method, classes, background, params = None, None, None, None
     hover = {}
     skraa_images = []
+    dsm = dtm = lidar = None
     if has_token:
         ortho_years = [int(y) for y in args.orto_years.split(",")]
         for year in ortho_years:
@@ -302,7 +304,30 @@ def main() -> None:
     if background is not None:
         outputs.blend_png(out / "kort.png", background, classes)
 
+    # 5. Buildings on the property: BBR attributes and roof shape from the surface model
+    bld_records, bld_summary = [], None
+    if gdk and gdk["bygninger"]:
+        bbr_index = len(src.items)
+        bbr = src.fetch("BBR bygninger (Datafordeler GraphQL)", datafordeler.bbr_buildings,
+                        [b["properties"]["BBRUUID"] for b in gdk["bygninger"] if b["properties"].get("BBRUUID")])
+        bld_records = bldg.analyse(gdk["bygninger"], bbr, grid, parcel, dsm, dtm,
+                                   lidar["antal"] if lidar else None)
+        if bld_records:
+            bld_summary = bldg.summary(bld_records)
+            if bbr is not None:
+                src.items[bbr_index]["note"] = (f"{bld_summary['med_bbr']} af {bld_summary['antal']} bygninger på "
+                                                "ejendommen har BBR-data")
+            bldg.write_csv(out / "bygninger.csv", bld_records)
+            bldg.write_geojson(out / "bygninger.geojson", bld_records)
+            bld_index = bldg.index_raster(bld_records, grid)
+            bldg.roof_png(out / "lag" / "tagmateriale.png", bld_records, bld_index)
+            layers.append({"navn": "Bygninger: tagmateriale (BBR)", "fil": "output/lag/tagmateriale.png",
+                           "type": "overlay", "legende": bldg.roof_legend(bld_records)})
+            hover["bygning"] = bld_index
+
     metrics = {"arealer_m2": area, "polygoner": n_polygons}
+    if bld_summary:
+        metrics["bygninger"] = bld_summary
     if gdk:
         metrics["overensstemmelse_geodanmark"] = outputs.agreement(classes, gdk["klasser"], "GeoDanmark (ikke facit)")
     if osm_data:
@@ -318,12 +343,13 @@ def main() -> None:
         "omraade": area_note, "gyldigt_areal": valid_area,
         "ejendom_areal_m2": round(parcel.area, 1) if parcel is not None else None, "grid": {"crs": "EPSG:25832", "bbox": grid.bbox, "opløsning_m": res,
                                        "pixels": [grid.width, grid.height]},
-        "metode": method, "parametre": params, "skraafoto": skraa_images, "note": args.note, "kilder": src.items,
+        "metode": method, "parametre": params, "bygning_parametre": bldg.DEFAULTS, "skraafoto": skraa_images, "note": args.note, "kilder": src.items,
         "argumenter": vars(args),
     }
     (run_dir / "run.json").write_text(json.dumps(run_info, ensure_ascii=False, indent=2), encoding="utf-8")
     outputs.write_viewer(run_dir / "viewer.html", f"Analyzer – BFE {args.bfe}", grid, layers, area, run_info,
-                         rasters={**hover, "klasse": classes})
+                         rasters={**hover, "klasse": classes},
+                         buildings=[bldg.public(r) for r in bld_records], building_summary=bld_summary)
 
     template = (RUNS / "_skabelon" / "evaluering.md").read_text(encoding="utf-8")
     template = (template.replace("<run-mappe, fx 2026-10-08_1430_bfe-5522814>", run_name)

@@ -3,3 +3,6 @@ runs/*/data/
 .venv/
 __pycache__/
 cache/
+runs/*
+!runs/_skabelon/
+!runs/reference/
