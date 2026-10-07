@@ -1,5 +1,6 @@
 """Write run outputs: GeoTIFF, CSV, GeoJSON, PNG layers, metrics and the local viewer."""
 
+import base64
 import csv
 import json
 from pathlib import Path
@@ -68,19 +69,88 @@ def rgb_png(path: Path, rgb: np.ndarray) -> None:
     Image.fromarray(rgb.astype("uint8")).save(path, optimize=True)
 
 
-def ndvi_png(path: Path, ndvi: np.ndarray) -> None:
-    t = np.clip((np.nan_to_num(ndvi, nan=-1) + 0.2) / 0.9, 0, 1)[..., None]
+NDVI_INFO = ("NDVI = Normalized Difference Vegetation Index (normaliseret vegetationsindeks). "
+             "Beregnes som (nær-infrarød − rød) / (nær-infrarød + rød). Levende planter reflekterer meget "
+             "nær-infrarødt lys og optager rødt lys, så de får høje værdier. Belægning, tage og vand ligger "
+             "omkring 0 eller under. Skala fra −1 til 1.")
+HEIGHT_INFO = ("Højde over terræn = Danmarks Højdemodel, overflade minus terræn. Viser hvor højt det, der står på "
+               "jorden, er: græs og belægning ca. 0 m, buske og hække 0,5–3 m, træer og huse højere.")
+LAYER_INFO = {
+    "cir": "CIR = farve-infrarødt foto. Nær-infrarødt vises som rødt, så levende vegetation står kraftigt rødt.",
+    "klasser": "Run'ens resultat: hver pixel er klassificeret som belægning, græs, buske, træer eller bygning.",
+    "geodanmark": "GeoDanmark: officielle kortdata (bygningsomrids, enkelttræer, p-pladser). Bruges som maske og kontrol.",
+    "osm": "OpenStreetMap: frivilligt kortlagte data. Kun til kontrol, ikke facit.",
+    "worldcover": "ESA WorldCover: europæisk arealdækkekort i 10 m opløsning. Grov baseline.",
+    "sentinel2": "Sentinel-2: satellitbilleder fra EU's Copernicus, 10 m opløsning. Median af skyfrie sommerscener.",
+    "ejendom": "Ejendomsgrænsen fra matriklen (samlet fast ejendom). Arealer regnes kun indenfor.",
+}
+
+
+NDVI_MIN, NDVI_MAX = -0.2, 0.7
+HEIGHT_MAX_M = 15.0
+
+
+def _ndvi_rgb(t: np.ndarray) -> np.ndarray:
     low, high = np.array([150, 110, 70]), np.array([20, 140, 40])
-    rgb = (low * (1 - t) + high * t).astype("uint8")
+    return low * (1 - t) + high * t
+
+
+def _height_rgb(t: np.ndarray) -> np.ndarray:
+    return np.stack([255 * t, 255 * np.sqrt(t), 255 * (1 - t)], axis=-1)
+
+
+def _gradient(color_fn, steps: int = 12) -> str:
+    stops = []
+    for i in range(steps + 1):
+        t = i / steps
+        r, g, b = (int(v) for v in np.asarray(color_fn(np.array([t]))).reshape(-1)[:3])
+        stops.append(f"rgb({r},{g},{b}) {100 * t:.0f}%")
+    return "linear-gradient(to right, " + ", ".join(stops) + ")"
+
+
+def ndvi_png(path: Path, ndvi: np.ndarray) -> None:
+    t = np.clip((np.nan_to_num(ndvi, nan=-1) - NDVI_MIN) / (NDVI_MAX - NDVI_MIN), 0, 1)[..., None]
+    rgb = _ndvi_rgb(t).astype("uint8")
     alpha = np.where(np.isnan(ndvi), 0, 255).astype("uint8")[..., None]
     Image.fromarray(np.concatenate([rgb, alpha], axis=-1)).save(path, optimize=True)
 
 
-def height_png(path: Path, ndsm: np.ndarray, max_m: float = 15.0) -> None:
-    t = np.clip(np.nan_to_num(ndsm, nan=0) / max_m, 0, 1)
-    rgb = np.stack([255 * t, 255 * np.sqrt(t), 255 * (1 - t)], axis=-1).astype("uint8")
+def ndvi_legend(threshold: float | None = None) -> dict:
+    note = "Under 0 er typisk belægning, tag og vand. Over ca. 0,2 er typisk vegetation."
+    if threshold is not None:
+        note += f" Run'en regner over {threshold:.2f} som vegetation."
+    return {"titel": "Vegetationsindeks (NDVI)", "min": NDVI_MIN, "max": NDVI_MAX, "enhed": "",
+            "gradient": _gradient(lambda t: _ndvi_rgb(t[:, None])), "ticks": [-0.2, 0, 0.2, 0.4, 0.7],
+            "note": note, "info": NDVI_INFO}
+
+
+def height_png(path: Path, ndsm: np.ndarray) -> None:
+    t = np.clip(np.nan_to_num(ndsm, nan=0) / HEIGHT_MAX_M, 0, 1)
+    rgb = _height_rgb(t).astype("uint8")
     alpha = np.where(np.isnan(ndsm), 0, 255).astype("uint8")[..., None]
     Image.fromarray(np.concatenate([rgb, alpha], axis=-1)).save(path, optimize=True)
+
+
+def height_legend(params: dict) -> dict:
+    busk, trae = params["hoejde_busk_m"], params["hoejde_trae_m"]
+    return {"titel": "Højde over terræn", "min": 0, "max": HEIGHT_MAX_M, "enhed": "m",
+            "gradient": _gradient(_height_rgb), "ticks": [0, busk, trae, 6, 9, 12, HEIGHT_MAX_M],
+            "note": f"Græs under {busk:g} m, buske {busk:g}–{trae:g} m, træer over {trae:g} m. "
+                    f"Alt over {HEIGHT_MAX_M:g} m har samme farve. Hold musen over kortet for præcis højde.",
+            "info": HEIGHT_INFO}
+
+
+def encode_raster(data: np.ndarray, kind: str) -> str:
+    """Pack a raster as base64 uint8 for the viewer's hover readout. 255 = no data."""
+    if kind == "hoejde":  # decimetres, 0–25.4 m
+        v = np.clip(np.round(np.nan_to_num(data, nan=-1) * 10), 0, 254)
+        v[np.isnan(data)] = 255
+    elif kind == "ndvi":  # -1..1 mapped to 0..254
+        v = np.clip(np.round((np.nan_to_num(data, nan=0) + 1) * 127), 0, 254)
+        v[np.isnan(data)] = 255
+    else:  # class codes
+        v = data
+    return base64.b64encode(v.astype("uint8").tobytes()).decode("ascii")
 
 
 def outline_png(path: Path, geom, grid: Grid, width_m: float = 1.0) -> None:
@@ -142,11 +212,13 @@ def accuracy(classes: np.ndarray, ref: np.ndarray) -> dict:
 
 # ---------- Viewer ----------
 
-def write_viewer(path: Path, title: str, grid: Grid, layers: list[dict], area: dict, run_info: dict) -> None:
+def write_viewer(path: Path, title: str, grid: Grid, layers: list[dict], area: dict, run_info: dict,
+                 rasters: dict | None = None) -> None:
     legend = [{"navn": NAMES[c], "farve": "#%02x%02x%02x" % COLORS[c]} for c in NAMES]
     html = VIEWER_TEMPLATE.replace("__TITLE__", title).replace("__DATA__", json.dumps({
         "width": grid.width, "height": grid.height, "res": grid.res,
         "layers": layers, "areas": area, "legend": legend, "run": run_info,
+        "rasters": {k: encode_raster(v, k) for k, v in (rasters or {}).items()},
     }, ensure_ascii=False))
     path.write_text(html, encoding="utf-8")
 
@@ -174,6 +246,17 @@ VIEWER_TEMPLATE = """<!doctype html>
   td { padding:3px 0; border-bottom:1px solid var(--line); } td.n { text-align:right; }
   .sw { display:inline-block; width:12px; height:12px; border-radius:2px; margin-right:6px; vertical-align:-1px; }
   #map { height:100vh; background:#000; }
+  .i { display:inline-flex; align-items:center; justify-content:center; width:14px; height:14px; margin-left:6px;
+       border-radius:50%; border:1px solid var(--muted); color:var(--muted); font:italic 600 10px/1 Georgia, serif;
+       vertical-align:1px; cursor:help; }
+  .legend { margin:10px 0 6px; } .legend b { font-size:12px; font-weight:600; }
+  .bar { height:12px; border-radius:3px; margin:4px 0 2px; border:1px solid var(--line); }
+  .ticks { position:relative; height:14px; font-size:11px; color:var(--muted); font-variant-numeric: tabular-nums; }
+  .ticks span { position:absolute; transform:translateX(-50%); white-space:nowrap; }
+  .ticks span:first-child { transform:none; } .ticks span:last-child { transform:translateX(-100%); }
+  #readout { position:absolute; right:12px; bottom:12px; z-index:1000; background:rgba(20,20,18,.85); color:#fff;
+             padding:6px 10px; border-radius:6px; font:12px/1.4 system-ui, sans-serif; pointer-events:none;
+             font-variant-numeric: tabular-nums; }
   ul { padding-left:18px; margin:4px 0; } li { margin:2px 0; }
   input[type=range] { width:100%; }
   @media (max-width: 720px) { body { grid-template-columns: 1fr; grid-template-rows: auto 70vh; height:auto; }
@@ -187,6 +270,7 @@ VIEWER_TEMPLATE = """<!doctype html>
   <div id="warn" class="warn" hidden></div>
   <h2>Baggrund</h2><div id="bases"></div>
   <h2>Lag</h2><div id="overlays"></div>
+  <div id="legends"></div>
   <label class="muted">Gennemsigtighed for lag</label>
   <input type="range" id="opacity" min="0" max="100" value="60">
   <h2>Arealer</h2><table id="areas"></table>
@@ -194,7 +278,7 @@ VIEWER_TEMPLATE = """<!doctype html>
   <h2>Evaluering</h2>
   <div class="muted">Udfyld <code>evaluering.md</code> i run-mappen.</div>
 </aside>
-<div id="map"></div>
+<div id="map" style="position:relative"><div id="readout" hidden></div></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
 const D = __DATA__;
@@ -204,24 +288,63 @@ map.fitBounds(bounds);
 let opacity = 0.6;
 const overlays = [];
 let base = null;
+const legendLayers = [];
 const basesEl = document.getElementById('bases'), ovEl = document.getElementById('overlays');
 D.layers.forEach((l, i) => {
   const layer = L.imageOverlay(l.fil, bounds, { opacity: (l.type === 'base' || l.fast) ? 1 : opacity });
   const lab = document.createElement('label');
   const inp = document.createElement('input');
+  const info = l.info || (l.legende && l.legende.info);
+  const name = document.createElement('span'); name.textContent = l.navn;
+  if (info) { lab.title = info; name.append(Object.assign(document.createElement('span'),
+    { className: 'i', textContent: 'i' })); }
   if (l.type === 'base') {
     inp.type = 'radio'; inp.name = 'base';
     if (!base) { inp.checked = true; base = layer; layer.addTo(map); }
     inp.onchange = () => { if (base) map.removeLayer(base); base = layer; layer.addTo(map); layer.bringToBack(); };
-    lab.append(inp, l.navn); basesEl.append(lab);
+    lab.append(inp, name); basesEl.append(lab);
   } else {
     inp.type = 'checkbox'; inp.checked = !!l.vis;
     if (l.vis) layer.addTo(map);
-    inp.onchange = () => inp.checked ? layer.addTo(map) : map.removeLayer(layer);
+    inp.onchange = () => { inp.checked ? layer.addTo(map) : map.removeLayer(layer); renderLegends(); };
+    if (l.legende) legendLayers.push({ l, inp });
     if (!l.fast) overlays.push(layer);
-    lab.append(inp, l.navn); ovEl.append(lab);
+    lab.append(inp, name); ovEl.append(lab);
   }
 });
+function renderLegends() {
+  const el = document.getElementById('legends'); el.innerHTML = '';
+  for (const { l, inp } of legendLayers) {
+    if (!inp.checked) continue;
+    const g = l.legende, span = g.max - g.min, fmt = v => v.toLocaleString('da-DK') + (g.enhed ? ' ' + g.enhed : '');
+    const box = document.createElement('div'); box.className = 'legend';
+    const t = document.createElement('b'); t.textContent = g.titel;
+    if (g.info) { t.title = g.info; t.style.cursor = 'help';
+      t.append(Object.assign(document.createElement('span'), { className: 'i', textContent: 'i' })); }
+    const why = g.info ? Object.assign(document.createElement('div'), { className: 'muted', textContent: g.info }) : null;
+    const bar = document.createElement('div'); bar.className = 'bar'; bar.style.background = g.gradient;
+    const ticks = document.createElement('div'); ticks.className = 'ticks';
+    g.ticks.forEach(v => { const s = document.createElement('span'); s.style.left = (100 * (v - g.min) / span) + '%';
+      s.textContent = fmt(v); ticks.append(s); });
+    const n = document.createElement('div'); n.className = 'muted'; n.textContent = g.note;
+    box.append(t, bar, ticks, n); if (why) box.append(why); el.append(box);
+  }
+}
+renderLegends();
+const decode = b => b ? Uint8Array.from(atob(b), c => c.charCodeAt(0)) : null;
+const R = { hoejde: decode(D.rasters.hoejde), ndvi: decode(D.rasters.ndvi), klasse: decode(D.rasters.klasse) };
+const classNames = Object.fromEntries(D.legend.map((x, i) => [i + 1, x.navn]));
+const ro = document.getElementById('readout');
+map.on('mousemove', e => {
+  const row = Math.floor(D.height - e.latlng.lat), col = Math.floor(e.latlng.lng);
+  if (row < 0 || col < 0 || row >= D.height || col >= D.width) { ro.hidden = true; return; }
+  const i = row * D.width + col, parts = [];
+  if (R.klasse) parts.push(classNames[R.klasse[i]] || 'Uden for ejendommen');
+  if (R.hoejde && R.hoejde[i] !== 255) parts.push('Højde ' + (R.hoejde[i] / 10).toLocaleString('da-DK', { minimumFractionDigits: 1 }) + ' m');
+  if (R.ndvi && R.ndvi[i] !== 255) parts.push('NDVI (grønhed) ' + (R.ndvi[i] / 127 - 1).toLocaleString('da-DK', { maximumFractionDigits: 2 }));
+  ro.textContent = parts.join(' · '); ro.hidden = parts.length === 0;
+});
+map.on('mouseout', () => { ro.hidden = true; });
 document.getElementById('opacity').oninput = e => { opacity = e.target.value / 100; overlays.forEach(o => o.setOpacity(opacity)); };
 const colors = Object.fromEntries(D.legend.map(x => [x.navn, x.farve]));
 const tb = document.getElementById('areas');

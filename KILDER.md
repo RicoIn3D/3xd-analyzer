@@ -18,7 +18,7 @@ Overblik (status pr. 2026-10-07, efter første run med rigtige data):
 | Danmarks Højdemodel, terræn + overflade (Dataforsyningen) | Højde: græs / buske / træer | I brug, virker |
 | Sentinel-2 L2A (Earth Search, AWS) | Støtte: sommer-NDVI | I brug, virker |
 | ESA WorldCover | Baseline | I brug, virker |
-| OpenStreetMap (Overpass) | Kontrol | I brug, Overpass giver ofte timeout |
+| OpenStreetMap (Overpass) | Kontrol | I brug. Overpass er ustabil: retry over 3 servere og cache i 30 dage. Problemer logges i `runs/DRIFTSLOG.md` |
 | Copernicus Data Space (øvrige lag) | Støtte: radar, CLMS m.m. | Nøgler sat, ikke bygget endnu |
 | Danmarks Højdemodel, punktsky | Klassificerede laserpunkter (vegetation/bygning) | Kandidat |
 | Skråfoto + fotoindex | Kontrol og optagedato | Kandidat |

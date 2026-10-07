@@ -2,3 +2,4 @@
 runs/*/data/
 .venv/
 __pycache__/
+cache/

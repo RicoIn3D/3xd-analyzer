@@ -1,5 +1,10 @@
 """OpenStreetMap via Overpass: buildings, roads, parking, grass and trees as a class raster (ODbL)."""
 
+import hashlib
+import json
+import time
+from pathlib import Path
+
 import numpy as np
 import requests
 from pyproj import Transformer
@@ -16,6 +21,12 @@ OVERPASS_URLS = (
     "https://overpass.kumi.systems/api/interpreter",
     "https://overpass.private.coffee/api/interpreter",
 )
+# Successful answers are cached per query. A fresh entry is reused; a stale one is the fallback when Overpass is down.
+CACHE_DIR = Path(__file__).resolve().parents[2] / "cache" / "osm"
+CACHE_MAX_AGE_DAYS = 30
+# One round tries every server. Pause in seconds after each round; 0 = no pause after the last round.
+RETRY_PAUSES_S = (10, 30, 0)
+REQUEST_TIMEOUT_S = 45
 _to_utm = Transformer.from_crs("EPSG:4326", CRS, always_xy=True).transform
 
 UNPAVED = {"grass", "dirt", "earth", "ground", "unpaved", "grass_paver", "sand", "mud"}
@@ -53,9 +64,52 @@ def _classify(tags: dict, closed: bool):
     return None
 
 
+def _overpass(q: str) -> tuple[dict, dict]:
+    """Query Overpass with retries across servers. Cache successful answers on disk.
+
+    Returns (answer, info). info says whether the answer is live or from cache and lists failed attempts.
+    Falls back to a stale cache entry when all servers fail.
+    """
+    key = hashlib.sha256(q.encode("utf-8")).hexdigest()[:16]
+    cache_file = CACHE_DIR / f"{key}.json"
+    attempts = []
+
+    if cache_file.exists():
+        age_days = (time.time() - cache_file.stat().st_mtime) / 86400
+        if age_days < CACHE_MAX_AGE_DAYS:
+            return json.loads(cache_file.read_text(encoding="utf-8")), {
+                "kilde": "cache", "alder_dage": round(max(age_days, 0.0), 1), "forsøg": attempts}
+
+    for round_no, pause in enumerate(RETRY_PAUSES_S, start=1):
+        for url in OVERPASS_URLS:
+            started = time.monotonic()
+            try:
+                r = requests.post(url, data={"data": q}, timeout=REQUEST_TIMEOUT_S,
+                                  headers={"User-Agent": "Analyzier/0.2 (3XD ApS)"})
+                result = f"HTTP {r.status_code}"
+                if r.status_code == 200:
+                    answer = r.json()
+                    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+                    cache_file.write_text(json.dumps(answer), encoding="utf-8")
+                    return answer, {"kilde": "live", "server": url, "forsøg": attempts}
+            except (requests.RequestException, ValueError) as e:
+                result = type(e).__name__
+            attempts.append({"runde": round_no, "server": url, "resultat": result,
+                             "sekunder": round(time.monotonic() - started, 1)})
+        if pause:
+            time.sleep(pause)
+
+    if cache_file.exists():
+        age_days = (time.time() - cache_file.stat().st_mtime) / 86400
+        return json.loads(cache_file.read_text(encoding="utf-8")), {
+            "kilde": "gammel cache", "alder_dage": round(max(age_days, 0.0), 1), "forsøg": attempts}
+    raise SourceUnavailable("Overpass: alle forsøg fejlede: " +
+                            "; ".join(f"{a['server'].split('/')[2]} {a['resultat']}" for a in attempts))
+
+
 def osm(grid: Grid) -> dict:
     lon0, lat0, lon1, lat1 = grid.bbox_wgs84()
-    bb = f"{lat0},{lon0},{lat1},{lon1}"
+    bb = f"{lat0:.5f},{lon0:.5f},{lat1:.5f},{lon1:.5f}"
     q = f"""[out:json][timeout:60];
 (
   way["building"]({bb});
@@ -67,20 +121,8 @@ def osm(grid: Grid) -> dict:
   node["natural"="tree"]({bb});
 );
 out geom;"""
-    status = []
-    for url in OVERPASS_URLS:
-        try:
-            r = requests.post(url, data={"data": q}, timeout=120,
-                              headers={"User-Agent": "Analyzier/0.1 (3XD ApS)"})
-        except requests.RequestException as e:
-            status.append(f"{url}: {type(e).__name__}")
-            continue
-        if r.status_code == 200:
-            break
-        status.append(f"{url}: HTTP {r.status_code}")
-    else:
-        raise SourceUnavailable("Overpass: " + "; ".join(status))
-    elements = r.json().get("elements", [])
+    answer, info = _overpass(q)
+    elements = answer.get("elements", [])
 
     shapes, features = [], []
     for el in elements:
@@ -115,4 +157,4 @@ out geom;"""
         raster = rasterize(((g, c) for _, g, c in shapes), out_shape=grid.shape,
                            transform=grid.transform, fill=0, dtype="uint8")
     return {"klasser": raster, "geojson": {"type": "FeatureCollection", "features": features},
-            "antal_objekter": len(features)}
+            "antal_objekter": len(features), "hentning": info}

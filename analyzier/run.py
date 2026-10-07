@@ -76,6 +76,16 @@ def load_area(path: Path):
     return geom
 
 
+def log_issue(run_name: str, source: str, text: str) -> None:
+    """Append an operational problem with a data source to runs/DRIFTSLOG.md."""
+    path = RUNS / "DRIFTSLOG.md"
+    if not path.exists():
+        path.write_text("# Driftslog\n\nProblemer med datakilder under runs. Skrives automatisk af pipelinen.\n\n"
+                        "| Tidspunkt | Run | Kilde | Problem |\n|---|---|---|---|\n", encoding="utf-8")
+    with path.open("a", encoding="utf-8") as f:
+        f.write(f"| {dt.datetime.now():%Y-%m-%d %H:%M} | {run_name} | {source} | {redact(text)} |\n")
+
+
 def git_commit() -> str | None:
     try:
         return subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"],
@@ -137,7 +147,20 @@ def main() -> None:
 
     # 2. Data
     layers = []
+    osm_index = len(src.items)
     osm_data = src.fetch("OpenStreetMap (Overpass)", osm.osm, grid)
+    osm_item = src.items[osm_index]
+    if osm_data:
+        info = osm_data["hentning"]
+        osm_item["hentning"] = info
+        if info["kilde"] != "live":
+            osm_item["note"] = f"fra {info['kilde']} ({info['alder_dage']} dage gammel)"
+        if info["forsøg"]:
+            fails = len(info["forsøg"])
+            log_issue(run_name, "Overpass", f"{fails} mislykkede forsøg før svar ({info['kilde']}): "
+                      + ", ".join(f"{x['server'].split('/')[2]} {x['resultat']}" for x in info["forsøg"]))
+    else:
+        log_issue(run_name, "Overpass", osm_item.get("note", "ukendt fejl"))
     gdk_index = len(src.items)
     gdk = src.fetch("GeoDanmark vektor (Datafordeler WFS)", datafordeler.geodanmark, grid)
     if gdk:
@@ -153,6 +176,7 @@ def main() -> None:
         buildings = None
 
     method, classes, background, params = None, None, None, None
+    hover = {}
     if has_token:
         ortho_years = [int(y) for y in args.orto_years.split(",")]
         for year in ortho_years:
@@ -169,7 +193,7 @@ def main() -> None:
                 cir_year = year
                 outputs.rgb_png(run_dir / "output" / "lag" / f"orto_{year}_cir.png", cir)
                 layers.append({"navn": f"Ortofoto {year} CIR", "fil": f"output/lag/orto_{year}_cir.png",
-                               "type": "base"})
+                               "type": "base", "info": outputs.LAYER_INFO["cir"]})
                 break
         dtm = src.fetch("DHM terræn (Dataforsyningen)", dataforsyningen.dhm, grid, "dhm_terraen")
         dsm = src.fetch("DHM overflade (Dataforsyningen)", dataforsyningen.dhm, grid, "dhm_overflade")
@@ -181,8 +205,11 @@ def main() -> None:
             outputs.write_geotiff(run_dir / "data" / "ndsm.tif", grid, ndsm)
             outputs.ndvi_png(run_dir / "output" / "lag" / "ndvi.png", ndvi)
             outputs.height_png(run_dir / "output" / "lag" / "hoejde.png", ndsm)
-            layers += [{"navn": f"NDVI (ortofoto {cir_year})", "fil": "output/lag/ndvi.png", "type": "overlay"},
-                       {"navn": "Højde over terræn (DHM)", "fil": "output/lag/hoejde.png", "type": "overlay"}]
+            layers += [{"navn": f"NDVI (ortofoto {cir_year})", "fil": "output/lag/ndvi.png", "type": "overlay",
+                        "legende": outputs.ndvi_legend(params["ndvi_vegetation"])},
+                       {"navn": "Højde over terræn (DHM)", "fil": "output/lag/hoejde.png", "type": "overlay",
+                        "legende": outputs.height_legend(params)}]
+            hover = {"hoejde": ndsm, "ndvi": ndvi}
             classes = classify.ortho_dhm(ndvi, ndsm, buildings, params)
     else:
         src.note("Dataforsyningen (ortofoto + DHM)", "sprunget over",
@@ -199,8 +226,10 @@ def main() -> None:
         src.items[s2_index]["scener"] = s2["scener"]
         outputs.rgb_png(run_dir / "output" / "lag" / "sentinel2.png", s2["rgb"])
         outputs.ndvi_png(run_dir / "output" / "lag" / "sentinel2_ndvi.png", s2["ndvi"])
-        layers.append({"navn": "Sentinel-2 sommer (median)", "fil": "output/lag/sentinel2.png", "type": "base"})
-        layers.append({"navn": "Sentinel-2 NDVI", "fil": "output/lag/sentinel2_ndvi.png", "type": "overlay"})
+        layers.append({"navn": "Sentinel-2 sommer (median)", "fil": "output/lag/sentinel2.png", "type": "base",
+                       "info": outputs.LAYER_INFO["sentinel2"]})
+        layers.append({"navn": "Sentinel-2 NDVI", "fil": "output/lag/sentinel2_ndvi.png", "type": "overlay",
+                       "legende": outputs.ndvi_legend(classify.DEFAULTS["sentinel2"]["ndvi_vegetation"])})
         outputs.write_geotiff(run_dir / "data" / "sentinel2_ndvi.tif", grid, s2["ndvi"].astype("float32"))
         if background is None:
             background = s2["rgb"]
@@ -210,7 +239,8 @@ def main() -> None:
                             50: (200, 70, 60), 60: (180, 170, 150), 80: (60, 120, 220)}.items():
             wc_rgb[wc == code] = (*color, 255)
         Image.fromarray(wc_rgb).save(run_dir / "output" / "lag" / "worldcover.png")
-        layers.append({"navn": "ESA WorldCover", "fil": "output/lag/worldcover.png", "type": "overlay"})
+        layers.append({"navn": "ESA WorldCover", "fil": "output/lag/worldcover.png", "type": "overlay",
+                       "info": outputs.LAYER_INFO["worldcover"]})
 
     if method is None:
         if s2 is None:
@@ -231,20 +261,22 @@ def main() -> None:
     outputs.write_areas_csv(out / "arealer.csv", area)
     n_polygons = outputs.write_polygons(out / "arealer.geojson", classes, grid)
     outputs.class_png(out / "lag" / "klasser.png", classes)
-    layers.append({"navn": "Resultat: arealtyper", "fil": "output/lag/klasser.png", "type": "overlay", "vis": True})
+    layers.append({"navn": "Resultat: arealtyper", "fil": "output/lag/klasser.png", "type": "overlay", "vis": True,
+                   "info": outputs.LAYER_INFO["klasser"]})
     if gdk:
         outputs.class_png(out / "lag" / "geodanmark.png", gdk["klasser"])
         (out / "geodanmark.geojson").write_text(json.dumps(gdk["geojson"]), encoding="utf-8")
         layers.append({"navn": "GeoDanmark (bygninger, træer, p-pladser)", "fil": "output/lag/geodanmark.png",
-                       "type": "overlay"})
+                       "type": "overlay", "info": outputs.LAYER_INFO["geodanmark"]})
     if osm_data:
         outputs.class_png(out / "lag" / "osm.png", osm_data["klasser"])
         (out / "osm.geojson").write_text(json.dumps(osm_data["geojson"]), encoding="utf-8")
-        layers.append({"navn": "OpenStreetMap (til kontrol)", "fil": "output/lag/osm.png", "type": "overlay"})
+        layers.append({"navn": "OpenStreetMap (til kontrol)", "fil": "output/lag/osm.png", "type": "overlay",
+                       "info": outputs.LAYER_INFO["osm"]})
     if parcel is not None:
         outputs.outline_png(out / "lag" / "ejendom.png", parcel, grid)
         layers.append({"navn": "Ejendomsgrænse", "fil": "output/lag/ejendom.png", "type": "overlay", "vis": True,
-                       "fast": True})
+                       "fast": True, "info": outputs.LAYER_INFO["ejendom"]})
     if background is not None:
         outputs.blend_png(out / "kort.png", background, classes)
 
@@ -268,7 +300,8 @@ def main() -> None:
         "argumenter": vars(args),
     }
     (run_dir / "run.json").write_text(json.dumps(run_info, ensure_ascii=False, indent=2), encoding="utf-8")
-    outputs.write_viewer(run_dir / "viewer.html", f"Analyzier – BFE {args.bfe}", grid, layers, area, run_info)
+    outputs.write_viewer(run_dir / "viewer.html", f"Analyzier – BFE {args.bfe}", grid, layers, area, run_info,
+                         rasters={**hover, "klasse": classes})
 
     template = (RUNS / "_skabelon" / "evaluering.md").read_text(encoding="utf-8")
     template = (template.replace("<run-mappe, fx 2026-10-08_1430_bfe-5522814>", run_name)
