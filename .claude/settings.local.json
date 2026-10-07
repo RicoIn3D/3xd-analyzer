@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./run.sh --bfe 5522814 --center 558376,6369071 --size 400 --note \"Run uden nøgler: Sentinel-2 + WorldCover + OSM\")",
+      "Bash(cd *)"
+    ]
+  }
+}
