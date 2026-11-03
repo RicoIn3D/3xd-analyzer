@@ -148,7 +148,7 @@ def geodanmark(grid: Grid) -> dict:
     key = _api_key()
     types = _feature_types(key)
     bbox = ",".join(f"{v:.2f}" for v in grid.bbox) + f",{CRS}"
-    shapes, features, counts, missing, buildings = [], [], {}, [], []
+    shapes, features, counts, missing, buildings, trees = [], [], {}, [], [], []
     for entity, (cls, buf, prio) in GEODANMARK_ENTITIES.items():
         type_name = _pick(types, entity)
         if not type_name:
@@ -171,6 +171,9 @@ def geodanmark(grid: Grid) -> dict:
                 z = get_coordinates(geom3d, include_z=True)[:, 2] if geom3d.has_z else None
                 buildings.append({"geom": geom, "properties": f.get("properties") or {},
                                   "z": float(np.nanmedian(z)) if z is not None and z.size else None})
+            elif entity in ("Trae", "Traegruppe"):
+                # Trae points carry the ground height at the trunk (DVR90); Traegruppe is a polygon
+                trees.append({"objekttype": entity, "geom": geom})
             features.append({"type": "Feature", "geometry": mapping(transform(_to_wgs84, geom)),
                              "properties": {"objekttype": entity, **{k: v for k, v in (f.get("properties") or {}).items()
                                                                      if isinstance(v, (str, int, float, bool))}}})
@@ -187,4 +190,5 @@ def geodanmark(grid: Grid) -> dict:
         raster = rasterize(((g, c) for _, g, c in shapes), out_shape=grid.shape,
                            transform=grid.transform, fill=0, dtype="uint8")
     return {"klasser": raster, "geojson": {"type": "FeatureCollection", "features": features},
-            "antal": counts, "mangler": missing, "bygninger": buildings}
+            "antal": counts, "mangler": missing, "bygninger": buildings,
+            "traeer": trees}

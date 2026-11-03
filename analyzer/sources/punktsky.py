@@ -21,6 +21,8 @@ CACHE_DIR = Path(__file__).resolve().parents[2] / "cache" / "dhm"
 # "Punktsky" is the current national point cloud. Areas are rescanned yearly from 2025, so it can be
 # newer than the 2023 flight. Punktsky2023 is the fallback.
 DATASETS = ("Punktsky", "Punktsky2023")
+# Medium and high vegetation points are also kept as points (x, y, z) for the 3D model's tree crowns
+VEGETATION = (4, 5)
 CLASSES = {2: "terræn", 3: "lav vegetation", 4: "mellem vegetation", 5: "høj vegetation", 6: "bygning", 9: "vand"}
 
 
@@ -99,6 +101,7 @@ def _count(grid: Grid, dataset: str, tiles: list[dict]) -> dict:
     total = 0
     files = []
     dates = set()
+    veg = []
     for tile in tiles:
         path = _download(tile, dataset)
         files.append(tile["fileName"])
@@ -115,6 +118,9 @@ def _count(grid: Grid, dataset: str, tiles: list[dict]) -> dict:
                 cls = np.asarray(pts.classification)[m]
                 idx = row * grid.width + col
                 total += int(m.sum())
+                v = np.isin(cls, VEGETATION)
+                if v.any():
+                    veg.append(np.column_stack([x[m][v], y[m][v], np.asarray(pts.z)[m][v], cls[v]]))
                 for c in CLASSES:
                     sel = cls == c
                     if sel.any():
@@ -124,5 +130,5 @@ def _count(grid: Grid, dataset: str, tiles: list[dict]) -> dict:
         raise SourceUnavailable("Punktsky: ingen punkter inden for området")
     area_m2 = (grid.xmax - grid.xmin) * (grid.ymax - grid.ymin)
     return {"antal": counts, "punkter": total, "tæthed_pr_m2": round(total / area_m2, 1), "filer": files,
-            "datasæt": dataset, "optaget": sorted(dates), "år": _year(dataset, dates),
+            "vegetation": np.vstack(veg) if veg else np.zeros((0, 4)), "datasæt": dataset, "optaget": sorted(dates), "år": _year(dataset, dates),
             "fordeling_pct": {CLASSES[c]: round(100 * float(v.sum()) / total, 1) for c, v in counts.items()}}

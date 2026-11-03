@@ -6,6 +6,11 @@ Buildings come in two variants:
 - measured: the roof surface taken straight from the DHM surface model, only where the point cloud sees the roof.
   Coloured by its deviation from the simple model, so the baseline can be checked.
 
+Trees also come in two variants:
+- simple: trunk and ellipsoid crown per tree, at GeoDanmark tree points and at crown tops the surface model shows
+  inside the tree class. Height and crown size are measured in the canopy height model (surface minus terrain).
+- measured: the point cloud's vegetation points (ASPRS 4 and 5) on the property as glTF points.
+
 Units are metres. The origin is the property centroid at median ground level (written to model.json).
 glTF is Y-up and right-handed: x = east, y = up, z = south.
 """
@@ -24,6 +29,7 @@ import requests
 import shapely
 from PIL import Image
 from rasterio.enums import Resampling
+from scipy import ndimage
 from rasterio.windows import Window
 from shapely import affinity
 from shapely.geometry import Polygon, box
@@ -31,7 +37,7 @@ from shapely.geometry.polygon import orient
 
 from analyzer import VERSION
 from analyzer.buildings import NO_BBR_COLOR, TAG_COLORS, public
-from analyzer.classes import COLORS, UDENFOR
+from analyzer.classes import BYGNING, COLORS, TRAEER, UDENFOR
 from analyzer.grid import Grid
 from analyzer.sources.skraafoto import STAC_URL, project
 
@@ -48,6 +54,13 @@ DEFAULTS = {
                                    # (cosine between the triangle normal and the direction to the camera)
     "skraafoto_max_side_px": 3000,  # texture size limit per oblique
     "skraafoto_margin_px": 60,  # cells further than this from the fit (chimneys, trees) are dropped and refitted
+    "trae_min_hoejde_m": 3.0,     # a crown top in the surface model counts as a tree from this height
+    "trae_top_radius_m": 2.5,     # crown tops closer than this are one tree; also how far a GeoDanmark point looks
+    "trae_max_krone_radius_m": 8.0,
+    "trae_kronekant_andel": 0.5,  # the crown edge is where the canopy drops below this share of the tree height
+    "trae_kronebund_andel": 0.35,  # crown base as share of the height (the surface model does not see under crowns)
+    "trae_standard_hoejde_m": 5.0,  # GeoDanmark trees with no measurable height (felled, or young)
+    "vegetation_max_punkter": 400_000,
 }
 
 # BBR byg032 wall material
@@ -334,6 +347,147 @@ def _deviation_colors(diff: np.ndarray, scale: float) -> np.ndarray:
     return np.where(t >= 0, grey + (red - grey) * t, grey + (blue - grey) * -t).astype("uint8")
 
 
+# Trees ---------------------------------------------------------------------------------------------------------
+
+def find_trees(gd_trees: list[dict], grid: Grid, parcel, dtm: np.ndarray, dsm: np.ndarray | None,
+               classes: np.ndarray, ortho: np.ndarray | None, p: dict = DEFAULTS) -> list[dict]:
+    """Trees on the property with trunk position, height, crown radius, crown base and colour.
+
+    GeoDanmark tree points come first (their position is the trunk). Crown tops in the canopy height model inside
+    the tree class add the trees GeoDanmark is missing; tops within trae_top_radius_m of a GeoDanmark tree are
+    that tree.
+    """
+    if dsm is None:
+        return []
+    res = grid.res
+    chm = np.nan_to_num(dsm - dtm, nan=0.0)
+    chm[classes == BYGNING] = 0.0
+    smooth = ndimage.gaussian_filter(chm, 0.5 / res)
+    near = int(round(p["trae_top_radius_m"] / res))
+    peaks = (smooth == ndimage.maximum_filter(smooth, size=2 * near + 1)) & (smooth >= p["trae_min_hoejde_m"])
+    peaks &= classes == TRAEER
+
+    def cell(x, y):
+        return int((grid.ymax - y) / res), int((x - grid.xmin) / res)
+
+    def inside_grid(r, c):
+        return 0 <= r < grid.height and 0 <= c < grid.width
+
+    def disc(r, c, k):
+        """Window bounds around (r, c) and a mask of the cells within k cells of it."""
+        r0, r1, c0, c1 = max(r - k, 0), min(r + k + 1, grid.height), max(c - k, 0), min(c + k + 1, grid.width)
+        rr, cc = np.ogrid[r0:r1, c0:c1]
+        return (r0, r1, c0, c1), (rr - r) ** 2 + (cc - c) ** 2 <= k ** 2
+
+    found = []
+    for t in gd_trees:
+        if t["objekttype"] != "Trae" or (parcel is not None and not parcel.contains(t["geom"])):
+            continue
+        r, c = cell(t["geom"].x, t["geom"].y)
+        if not inside_grid(r, c):
+            continue
+        (r0, r1, c0, c1), m = disc(r, c, near)
+        win = np.where(m, smooth[r0:r1, c0:c1], 0.0)
+        tr, tc = np.unravel_index(int(np.argmax(win)), win.shape)
+        found.append({"kilde": "GeoDanmark", "stamme": (r, c), "top": (r0 + tr, c0 + tc),
+                      "hoejde": float(win[tr, tc])})
+    for r, c in zip(*np.nonzero(peaks)):
+        if any((r - f["top"][0]) ** 2 + (c - f["top"][1]) ** 2 <= near ** 2
+               or (r - f["stamme"][0]) ** 2 + (c - f["stamme"][1]) ** 2 <= near ** 2 for f in found):
+            continue
+        found.append({"kilde": "Højdemodel", "stamme": (r, c), "top": (r, c), "hoejde": float(smooth[r, c])})
+
+    trees = []
+    for nr, f in enumerate(found, start=1):
+        height, measured = f["hoejde"], f["hoejde"] >= p["trae_min_hoejde_m"]
+        if not measured:
+            height = p["trae_standard_hoejde_m"]
+        (tr, tc), (sr, sc) = f["top"], f["stamme"]
+        radius = _crown_radius(smooth, tr, tc, height, res, p) if measured else height / 4
+        base = p["trae_kronebund_andel"] * height
+        color = (70, 110, 55)
+        if ortho is not None:
+            (r0, r1, c0, c1), m = disc(tr, tc, max(1, int(radius * 0.7 / res)))
+            sub = m & (smooth[r0:r1, c0:c1] > base)
+            if sub.any():
+                color = tuple(int(v) for v in np.median(ortho[r0:r1, c0:c1][sub], axis=0))
+        trees.append({
+            "nr": nr, "kilde": f["kilde"],
+            "x": grid.xmin + (sc + 0.5) * res, "y": grid.ymax - (sr + 0.5) * res, "terraen_z": float(dtm[sr, sc]),
+            "top_x": grid.xmin + (tc + 0.5) * res, "top_y": grid.ymax - (tr + 0.5) * res,
+            "hoejde_m": round(height, 1), "hoejde_maalt": measured, "krone_diameter_m": round(2 * radius, 1),
+            "kronebund_m": round(base, 1), "farve": color})
+    return trees
+
+
+def _crown_radius(chm: np.ndarray, r: int, c: int, height: float, res: float, p: dict) -> float:
+    """Median distance, over 16 directions, until the canopy drops below the crown edge or rises into a neighbour."""
+    edge = p["trae_kronekant_andel"] * height
+    radii = []
+    for a in np.linspace(0, 2 * np.pi, 16, endpoint=False):
+        prev, dist = height, 0.0
+        for step in range(1, int(p["trae_max_krone_radius_m"] / res) + 1):
+            rr, cc = int(round(r - step * np.sin(a))), int(round(c + step * np.cos(a)))
+            if not (0 <= rr < chm.shape[0] and 0 <= cc < chm.shape[1]):
+                break
+            v = chm[rr, cc]
+            if v < edge or v > prev + 0.5:
+                break
+            prev, dist = min(prev, v), step * res
+        radii.append(dist)
+    return max(float(np.median(radii)), 1.0)
+
+
+def _tree_mesh(t: dict, mesh: Mesh, lon: int = 14, lat: int = 9) -> None:
+    """Ellipsoid crown centred over the crown top and a cylinder trunk from the ground into the crown."""
+    g, h, base = t["terraen_z"], t["hoejde_m"], t["kronebund_m"]
+    a, cz = t["krone_diameter_m"] / 2, g + (h + base) / 2
+    b = (h - base) / 2
+    phi = np.linspace(0, np.pi, lat + 1)[:, None]
+    th = np.linspace(0, 2 * np.pi, lon, endpoint=False)[None, :]
+    unit = np.stack([np.sin(phi) * np.cos(th), np.sin(phi) * np.sin(th), np.cos(phi) * np.ones_like(th)], -1)
+    unit = unit.reshape(-1, 3)
+    pos = unit * [a, a, b] + [t["top_x"], t["top_y"], cz]
+    nrm = unit / [a, a, b]
+    nrm /= np.linalg.norm(nrm, axis=1, keepdims=True)
+    idx = []
+    for i in range(lat):
+        for j in range(lon):
+            p00, p01 = i * lon + j, i * lon + (j + 1) % lon
+            p10, p11 = p00 + lon, p01 + lon
+            idx += [p00, p10, p01, p01, p10, p11]
+    mesh.add(pos, nrm, np.tile(np.array(t["farve"], dtype="uint8"), (len(pos), 1)), np.array(idx))
+
+    sides, rad = 8, max(0.08, h / 60)
+    top = g + base + 0.3 * (h - base)
+    th = np.linspace(0, 2 * np.pi, sides, endpoint=False)
+    ring = np.column_stack([np.cos(th), np.sin(th), np.zeros(sides)])
+    pos = np.vstack([ring * rad + [t["x"], t["y"], g - 0.2], ring * rad + [t["x"], t["y"], top]])
+    idx = []
+    for j in range(sides):
+        k = (j + 1) % sides
+        idx += [j, k, sides + j, sides + j, k, sides + k]
+    mesh.add(pos, np.vstack([ring, ring]), np.tile(np.array((95, 75, 55), dtype="uint8"), (2 * sides, 1)),
+             np.array(idx))
+
+
+def _vegetation_points(veg: np.ndarray, parcel, grid: Grid, ortho: np.ndarray | None, p: dict):
+    """Vegetation points on the property, thinned to vegetation_max_punkter, coloured from the orthophoto."""
+    if parcel is not None:
+        veg = veg[shapely.contains_xy(parcel, veg[:, 0], veg[:, 1])]
+    if len(veg) > p["vegetation_max_punkter"]:
+        veg = veg[np.random.default_rng(0).choice(len(veg), p["vegetation_max_punkter"], replace=False)]
+    if not len(veg):
+        return None
+    if ortho is not None:
+        rows = np.clip(((grid.ymax - veg[:, 1]) / grid.res).astype(int), 0, grid.height - 1)
+        cols = np.clip(((veg[:, 0] - grid.xmin) / grid.res).astype(int), 0, grid.width - 1)
+        colors = ortho[rows, cols]
+    else:
+        colors = np.where(veg[:, 3:4] == 5, [60, 110, 50], [120, 150, 70]).astype("uint8")
+    return veg[:, :3], colors.astype("uint8")
+
+
 # Obliques as textures -----------------------------------------------------------------------------------------
 
 def fetch_obliques(images: list[dict], area, z_range: tuple[float, float], p: dict = DEFAULTS) -> list[dict]:
@@ -422,8 +576,9 @@ def _srgb_to_linear(c: np.ndarray) -> np.ndarray:
 
 def _glb(parts: list[dict], origin: tuple[float, float, float], root: str, extras: dict,
          images: list[np.ndarray] | None = None) -> bytes:
-    """Binary glTF with one node per part. Each part: name, mesh (Mesh), extras (optional) and textured (optional):
-    chunks (positions, normals, uv, indices, image index) drawn unlit with the given JPEG-encoded images."""
+    """Binary glTF with one node per part. Each part: name, mesh (Mesh), extras (optional), points (optional):
+    (positions, colours) drawn as glTF points, and textured (optional): chunks (positions, normals, uv, indices,
+    image index) drawn unlit with the given JPEG-encoded images."""
     x0, y0, z0 = origin
     gltf = {"asset": {"version": "2.0", "generator": f"Analyzer {VERSION}", "extras": extras},
             "scene": 0, "scenes": [{"nodes": [0]}], "nodes": [{"name": root, "children": []}], "meshes": [],
@@ -487,6 +642,14 @@ def _glb(parts: list[dict], origin: tuple[float, float, float], root: str, extra
                                               "NORMAL": accessor(gnrm, 5126, "VEC3", 34962),
                                               "COLOR_0": accessor(gcol, 5123, "VEC4", 34962, normalized=True)},
                                "indices": accessor(idx.astype("uint32"), 5125, "SCALAR", 34963), "material": 0})
+        if part.get("points") is not None:
+            pos, col = part["points"]
+            gpos, _ = to_gltf(pos, np.zeros_like(pos))
+            rgba = np.column_stack([_srgb_to_linear(col.astype("float64")), np.ones(len(col))])
+            primitives.append({"attributes": {"POSITION": accessor(gpos, 5126, "VEC3", 34962, bounds=True),
+                                              "COLOR_0": accessor(np.round(rgba * 65535).astype("uint16"), 5123,
+                                                                  "VEC4", 34962, normalized=True)},
+                               "mode": 0, "material": 0})
         for pos, nrm, uv, idx, image in part.get("textured", []):
             gpos, gnrm = to_gltf(pos, nrm)
             primitives.append({"attributes": {"POSITION": accessor(gpos, 5126, "VEC3", 34962, bounds=True),
@@ -516,10 +679,11 @@ def _glb(parts: list[dict], origin: tuple[float, float, float], root: str, extra
 
 def write(out_dir: Path, title: str, grid: Grid, parcel, dtm: np.ndarray, dsm: np.ndarray | None,
           classes: np.ndarray, ortho: np.ndarray | None, records: list[dict], obliques: list[dict] | None = None,
-          p: dict = DEFAULTS) -> dict:
+          gd_trees: list[dict] | None = None, vegetation: np.ndarray | None = None, p: dict = DEFAULTS) -> dict:
     """Write terrain and building models as .glb, model.json and a self-contained model.html. Returns run.json info.
 
     obliques are the run's skråfoto entries (id, dato); with them the buildings are also written photo-textured.
+    gd_trees are GeoDanmark's Trae/Traegruppe objects and vegetation the point cloud's vegetation points (x, y, z, class).
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     inside = classes != UDENFOR
@@ -530,7 +694,7 @@ def write(out_dir: Path, title: str, grid: Grid, parcel, dtm: np.ndarray, dsm: n
     files = {}
 
     def save(name: str, parts: list[dict], description: str, images: list[np.ndarray] | None = None) -> None:
-        parts = [pt for pt in parts if pt["mesh"].arrays() is not None or pt.get("textured")]
+        parts = [pt for pt in parts if pt["mesh"].arrays() is not None or pt.get("textured") or pt.get("points")]
         if parts:
             (out_dir / name).write_bytes(_glb(parts, origin, name.removesuffix(".glb"),
                                               {**meta, "indhold": description}, images))
@@ -596,6 +760,21 @@ def write(out_dir: Path, title: str, grid: Grid, parcel, dtm: np.ndarray, dsm: n
     save("tag_maalt.glb", measured, "Tagflader målt i DHM overflade, farvet efter afvigelse fra den simple model "
                                     f"(rød = højere, blå = lavere, fuld farve ved {p['afvigelse_skala_m']} m)")
 
+    trees = find_trees(gd_trees or [], grid, parcel, dtm, dsm, classes, ortho, p)
+    tree_parts = []
+    for t in trees:
+        mesh = Mesh()
+        _tree_mesh(t, mesh)
+        tree_parts.append({"name": f"træ {t['nr']}", "mesh": mesh,
+                           "extras": {"trae": t["nr"], **{k: v for k, v in t.items() if k not in ("nr", "farve")}}})
+    save("traeer.glb", tree_parts, "Træer, simpel model: stamme og krone pr. træ. Position fra GeoDanmark og toppe i "
+                                   "højdemodellen, højde og kronebredde målt i højdemodellen, farve fra ortofotoet")
+    points = _vegetation_points(vegetation, parcel, grid, ortho, p) if vegetation is not None and len(vegetation) else None
+    if points is not None:
+        save("traeer_maalt.glb", [{"name": "vegetationspunkter", "mesh": Mesh(), "points": points}],
+             f"Træer og buske målt: punktskyens vegetationspunkter ({len(points[0]):,} stk.) farvet fra ortofotoet"
+             .replace(",", "."))
+
     meta["filer"] = files
     meta["parametre"] = p
     (out_dir / "model.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -604,7 +783,10 @@ def write(out_dir: Path, title: str, grid: Grid, parcel, dtm: np.ndarray, dsm: n
             .replace("__DATA__", json.dumps({"files": files, "glb": payload, "meta": meta}, ensure_ascii=False)))
     (out_dir / "model.html").write_text(html, encoding="utf-8")
     return {"origo_epsg25832_dvr90": list(origin), "filer": list(files), "bygninger": len(simple),
-            "tage_maalt": len(measured), "skraafotos": textured_info}
+            "tage_maalt": len(measured), "skraafotos": textured_info,
+            "traeer": {"i_alt": len(trees), "geodanmark": sum(t["kilde"] == "GeoDanmark" for t in trees),
+                       "hoejdemodel": sum(t["kilde"] == "Højdemodel" for t in trees),
+                       "vegetationspunkter": len(points[0]) if points is not None else 0}}
 
 
 MODEL_TEMPLATE = """<!doctype html>
@@ -636,8 +818,8 @@ MODEL_TEMPLATE = """<!doctype html>
   <div class="muted">3D-model af ejendommen. Træk for at dreje, scroll for at zoome, højreklik og træk for at flytte.</div>
   <h2>Lag</h2>
   <div id="layers"></div>
-  <h2>Bygning</h2>
-  <div id="info" class="muted">Klik på en bygning.</div>
+  <h2>Valgt</h2>
+  <div id="info" class="muted">Klik på en bygning eller et træ.</div>
   <h2>Om modellen</h2>
   <div class="muted" id="about"></div>
 </aside>
@@ -676,12 +858,18 @@ const groups = {};
 const toBuffer = b64 => Uint8Array.from(atob(b64), c => c.charCodeAt(0)).buffer;
 const textured = "bygninger_skraafoto.glb" in DATA.glb;
 const defaults = { "terraen.glb": true, "terraen_klasser.glb": false, "bygninger.glb": !textured,
-                   "bygninger_skraafoto.glb": true, "tag_maalt.glb": false };
+                   "bygninger_skraafoto.glb": true, "tag_maalt.glb": false, "traeer.glb": true,
+                   "traeer_maalt.glb": false };
 // Alternative looks of the same surface: only one of each group is shown at a time
-const exclusiveGroups = [["terraen.glb", "terraen_klasser.glb"], ["bygninger.glb", "bygninger_skraafoto.glb"]];
+const exclusiveGroups = [["terraen.glb", "terraen_klasser.glb"], ["bygninger.glb", "bygninger_skraafoto.glb"],
+                         ["traeer.glb", "traeer_maalt.glb"]];
 
 await Promise.all(Object.entries(DATA.glb).map(([name, b64]) => new Promise(done =>
-  loader.parse(toBuffer(b64), "", gltf => { groups[name] = gltf.scene; scene.add(gltf.scene); done(); }))));
+  loader.parse(toBuffer(b64), "", gltf => {
+    // Point clouds load as 1 px points; give them a size in metres
+    gltf.scene.traverse(obj => { if (obj.isPoints) { obj.material.size = 0.25; obj.material.sizeAttenuation = true; } });
+    groups[name] = gltf.scene; scene.add(gltf.scene); done();
+  }))));
 
 const layers = document.getElementById("layers");
 for (const [name, text] of Object.entries(DATA.files)) {
@@ -704,7 +892,8 @@ for (const [name, text] of Object.entries(DATA.files)) {
 const o = DATA.meta.origo_epsg25832_dvr90;
 document.getElementById("about").textContent = `${DATA.meta.akser}. Origo: ${o[0]} Ø, ${o[1]} N, ${o[2]} m (DVR90), ` +
   "i EPSG:25832. Den simple model er en baseline: tagform og højder er estimeret fra Danmarks Højdemodel, " +
-  "farver fra BBR. Den målte model viser tagfladen direkte fra højdemodellen.";
+  "farver fra BBR. Den målte model viser tagfladen direkte fra højdemodellen. Træernes kronebund er antaget; " +
+  "laserscanning og ortofoto er fra foråret, så kronerne kan være uden blade.";
 
 const bounds = new THREE.Box3();
 for (const g of Object.values(groups)) bounds.expandByObject(g);
@@ -719,15 +908,19 @@ const LABELS = { anvendelse: "Anvendelse", opfoerelsesaar: "Opført", etager: "E
   ydervaeg: "Ydervæg", tagform: "Tagform (målt)", taghaeldning_grader: "Taghældning (°)", model_tagform: "Tagform i model",
   model_tagfod_m: "Tagfod (m over terræn)", model_tagryg_m: "Tagryg (m over terræn)",
   model_afvigelse_m: "Afvigelse fra målt tag (m)", grundplan_m2: "Grundplan (m²)", tagareal_m2: "Tagareal (m²)" };
+const TREE_LABELS = { kilde: "Fundet i", hoejde_m: "Højde (m)", hoejde_maalt: "Højde målt i højdemodel",
+  krone_diameter_m: "Kronediameter (m)", kronebund_m: "Kronebund (m, antaget)" };
 renderer.domElement.addEventListener("click", e => {
   const r = renderer.domElement.getBoundingClientRect();
   mouse.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
   ray.setFromCamera(mouse, camera);
+  ray.params.Points.threshold = 0.2;
   const hit = ray.intersectObjects(Object.values(groups).filter(g => g.visible), true)
-    .find(h => h.object.userData && h.object.userData.nr !== undefined);
-  if (!hit) { info.textContent = "Klik på en bygning."; return; }
+    .find(h => h.object.userData && (h.object.userData.nr !== undefined || h.object.userData.trae !== undefined));
+  if (!hit) { info.textContent = "Klik på en bygning eller et træ."; return; }
   const d = hit.object.userData;
-  info.innerHTML = `<b>Bygning ${d.nr}</b><table>` + Object.entries(LABELS)
+  const [heading, labels] = d.trae !== undefined ? [`Træ ${d.trae}`, TREE_LABELS] : [`Bygning ${d.nr}`, LABELS];
+  info.innerHTML = `<b>${heading}</b><table>` + Object.entries(labels)
     .filter(([k]) => d[k] !== undefined && d[k] !== null)
     .map(([k, t]) => `<tr><td>${t}</td><td>${d[k]}</td></tr>`).join("") + "</table>";
 });

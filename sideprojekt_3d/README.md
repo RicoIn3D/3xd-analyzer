@@ -60,6 +60,20 @@ Velegnet til en subagent. Oprettet 2026-11-03.
 - Facaderne står ved tagkanten (opgave 1), så facadefotoet trækkes lidt skævt ud ved udhænget.
 - Terrænet har stadig ortofoto-farver pr. vertex, ikke skråfoto-tekstur.
 
+### Opgave 3: træer i 3D (første version 2026-11-03)
+
+**Lavet:** to lag, der vises som alternativer.
+- `traeer.glb` (simpel model): stamme og ellipseformet krone pr. træ. Træerne findes på to måder. GeoDanmarks `Trae`-punkter giver stammens position; punktets z er terrænet ved stammen, og der er hverken højde, kronebredde eller art. Toppe i kronehøjdemodellen (DHM overflade minus terræn, let udglattet) inden for klassen Træer tilføjer de træer, GeoDanmark mangler. En top inden for `trae_top_radius_m` af et GeoDanmark-træ hører til det træ. Højden er toppen i kronehøjdemodellen. Kroneradius er medianen over 16 retninger ud til det sted, hvor kronen falder under `trae_kronekant_andel` af højden eller stiger mod en nabokrone. Kronebunden er antaget (`trae_kronebund_andel`), fordi overflademodellen ikke ser under kronen. Farven er medianen af ortofotoet i kronen. Data pr. træ ligger som glTF-extras (klik i `model.html`).
+- `traeer_maalt.glb` (målt): punktskyens vegetationspunkter (ASPRS 4 og 5) på ejendommen som glTF-punkter, farvet fra ortofotoet.
+
+**Testcase:** 33 træer, 16 fra GeoDanmark og 17 fra højdemodellen, plus 39.125 vegetationspunkter. Fem GeoDanmark-træer i gården har ingen målbar højde, så de små eller nyplantede træer får `trae_standard_hoejde_m`. En kontrol af kronerne tegnet på ortofotoet passer med træerne.
+
+**Mangler:**
+- Laserscanning og ortofoto er fra foråret, så løvtræer står uden blade, og kronefarven bliver brun eller grå.
+- I sammenhængende bevoksning bliver kronerne for små, fordi der ikke er dal mellem kronerne. Der kan bruges watershed på kronehøjdemodellen.
+- Kronebunden kan måles fra punktskyen (laveste vegetationspunkter under kronen).
+- Unity: punkter vises som 1 px i glTFast. Træerne er ikke lagt i Unity-scenen endnu.
+
 ## Klimadatastyrelsens 3D Ortofoto (3DO)
 
 - Labs-prototype på Dataforsyningen: https://dataforsyningen.dk/labs/4963. Tredimensionelt luftfoto lavet ud fra skråfotos, hvor facader kan ses.
