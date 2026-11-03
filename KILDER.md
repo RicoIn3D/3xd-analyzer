@@ -28,6 +28,7 @@ Overblik (status pr. 2026-10-07, efter første run med rigtige data):
 | Datafordeler DAR | Adresse → BFE | Ikke nødvendig når BFE kendes |
 | Datafordeler BBR (`BBR_Bygning`) | Tagmateriale, ydervæg, anvendelse, opførelsesår pr. bygning | I brug fra v0.4, virker. Kobles via `BBRUUID` på GeoDanmark-bygningen |
 | Befæstelsesdata (Klimadatastyrelsen) | Belægning: AI-beregnet befæstelsesgrad | Kandidat, høj prioritet. Prototype, adgang afklares med KDS (se "Nye kandidater") |
+| 3D Ortofoto (3DO, Klimadatastyrelsen Labs) | 3D-model ud fra skråfotos (sideprojekt, se `SIDEPROJEKT-3D.md`) | Kandidat. Demo viser Aarhus, ikke Hjørring. Vi bygger egen model først |
 | Hexagon DDO, sommerortofoto | Træer/buske med løv, NDVI om sommeren | Kandidat, privat. Kun på tilbud |
 | CLMS HRL Imperviousness 2024 | Baseline for belægning (10 m) | Kandidat, lav prioritet |
 | Vexcel, Ecopia, Pléiades Neo, Vantor | Luftfoto, satellit, færdig klassifikation | Vurderet 2026-11-03, ikke anbefalet nu |
@@ -203,6 +204,7 @@ Gennemgang af nye kilder, offentlige og private. Konklusion: ortofoto 12,5 cm + 
 | Befæstelsesdata (Klimadatastyrelsen) | AI-model trænet på ca. 1,5 mio. skråfotos. Giver befæstelsesgrad fra blød (jord, sand) til hård (beton, asfalt). Prototype, "udstilles på Dataforsyningen" | Høj. Rammer belægningsklassen direkte. Opløsning, klasser, licens og tjenestenavn står ikke på siden, og vi fandt ingen tjeneste på Dataforsyningen. Kontakt: Center for Kort- og Klimadata, jor@kds.dk. Der findes også et ældre nationalt befæstelseskort (SDFI, UNet på RGB-ortofoto, befæstet/ubefæstet). Fagartiklen "Befæstelsesdata som prototype på basis af AI" (Geoforum Perspektiv, AAU) nævner, at data for hele landet blev vist i SDFE Labs (nu Dataforsyningens Labs-sektion). 2026-11-03 kunne vi ikke finde data der. Afventer svar fra KDS |
 | CLMS HRL Imperviousness 2024 | Befæstelsesgrad, 10 m. Lanceret efteråret 2026 | Lav: for groft. Baseline ligesom WorldCover |
 | Meta/WRI Canopy Height v2 (CHMv2) | Trækronehøjde fra Vantor-satellitbilleder, gratis på AWS | Lav: DHM er bedre. Kun sammenligning. Erstatter v1 under "Kandidater" |
+| 3D Ortofoto (3DO) | Tredimensionelt luftfoto lavet ud fra skråfotos. Kan drejes, så facader ses. Tænkt til lokalplan, byudvikling, energi, sol/skygge-, vind- og udsigtsanalyser. Labs-prototype: https://dataforsyningen.dk/labs/4963 | Relevant for 3D-sporet, ikke for klassificeringen. Demoen viser Aarhus, ikke testcasen i Hjørring. Format, dækning, licens og adgang ukendt (Labs-siden kræver JavaScript). Spørgsmål om 3DO kan tilføjes i mailen til KDS. Dataforsyningen skiftede driftsplatform 2. november 2026 |
 | Trækronekort | Intet landsdækkende statsligt datasæt fundet. Septima har en metode baseret på punktskyen (rådgivning, ikke data) | Ingen handling |
 
 **Private (priser er forhandlerpriser eller pejlemærker, ikke tilbud)**

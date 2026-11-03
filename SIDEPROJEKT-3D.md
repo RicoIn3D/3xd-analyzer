@@ -31,6 +31,20 @@ Idé: lav en 3D-model (Gaussian splatting eller farvelagt punktsky) af ejendomme
 4. **Flere årgange:** tilføj 2023 (tættest på 2025, mindst ændring), med samlet finjustering af kameraer.
 5. **Visning:** GaussianSplats3D eller Spark (three.js) i `viewer.html` eller en separat side.
 
+## Klimadatastyrelsens 3D Ortofoto (3DO)
+
+- Labs-prototype på Dataforsyningen: https://dataforsyningen.dk/labs/4963. Tredimensionelt luftfoto lavet ud fra skråfotos, hvor facader kan ses.
+- Det kan være den færdige udgave af det, vi selv ville lave med splatting. Demoen viser dog Aarhus, ikke testcasen i Hjørring, og format, dækning, licens og adgang er ukendt.
+- Beslutning 2026-11-03: vi bygger selv en model først. 3DO tages op igen, hvis KDS svarer, at det dækker landet og må bruges.
+
+## Første skridt: bygningsmodel som baseline
+
+Før billederne laves en 3D-model af bygningerne på matriklen ud fra data, vi allerede har i v0.4:
+
+- Grundplan fra GeoDanmark, højder fra DHM overflade minus terræn, tagform, hældning og retning fra bygningsanalysen, etager, tagmateriale og ydervæg fra BBR. Terræn fra DHM, skåret til matriklen.
+- To varianter: en **simpel model** (tagform med målte højder, LOD2) som baseline, og en **målt model** (tagflade direkte fra DHM overflade, kun celler med bygningspunkter i punktskyen). Forskellen mellem dem gemmes pr. bygning som kontrol.
+- Bygges i Python i pipelinen og eksporteres som `.glb` (meter, nulpunkt midt på ejendommen). Vises i Unity (glTFast, MCP for Unity fra Coplay) og i `viewer.html` med three.js.
+
 ## Sidegevinst: ændringer over tid
 
 Årgangene er nok mere værd til at se ændringer over tid end til 3D: ny belægning, fjernet beplantning, nye bygninger. Det kan bruges direkte i drift og som kontrol af klassificeringen.
