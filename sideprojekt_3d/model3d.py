@@ -118,6 +118,11 @@ def fit_roofs(records: list[dict], grid: Grid, dsm: np.ndarray | None, p: dict =
         kind = _roof_kind(r["tagform"])
         label = r["tagform"] if kind != "flat" or r["tagform"] == "fladt" else "fladt (forenklet)"
         h_med, h_max = r["hoejde_median_m"], r["hoejde_max_m"]
+        # An uncertain roof (hidden by trees, or built after the scan) gets no height from the surface model:
+        # it would measure the tree crowns or whatever stood there before
+        uncertain = (r["tagform"] or "").startswith("usikker")
+        if uncertain:
+            h_med = h_max = None
         if h_med is None:
             # No surface-model height (built after the scan, or hidden): GeoDanmark's measured roof edge, else BBR
             accuracy = r["geodanmark_hoejde_noejagtighed_m"]
@@ -148,7 +153,8 @@ def fit_roofs(records: list[dict], grid: Grid, dsm: np.ndarray | None, p: dict =
             hi, lo = z[v > 0], z[v < 0]
             if hi.size and lo.size and np.nanmean(hi) < np.nanmean(lo):
                 roof["side"] = -1.0
-        if dsm is not None and r["_fit_cells"] is not None and r["_fit_cells"].sum() >= p["tilpasning_min_celler"]:
+        if (not uncertain and dsm is not None and r["_fit_cells"] is not None
+                and r["_fit_cells"].sum() >= p["tilpasning_min_celler"]):
             _fit_heights(roof, r["_fit_cells"], grid, dsm, p)
         r["_roof"] = roof
         r["model_tagform"] = label

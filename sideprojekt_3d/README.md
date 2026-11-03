@@ -39,7 +39,9 @@ Idé: lav en 3D-model (Gaussian splatting eller farvelagt punktsky) af ejendomme
 
 ## Første skridt: bygningsmodel som baseline
 
-**Status 2026-11-03: bygget i v0.5.0** (`sideprojekt_3d/model3d.py`, output i run'ens `output/model/`). Testcasen: 8 bygninger. Tøndetagene afviger 0,22–0,39 m i snit fra DHM efter tilpasning med mindste kvadrater. To bygninger er usikre og får fladt tag: én dækket af træer, og en overdækning fra 2025 (bygget efter punktskyen), hvor højden kommer fra GeoDanmarks fotogrammetrisk målte tagkant (±0,15 m). GeoDanmarks tagkant bruges kun, når den er målt (ikke `Manuel`); ellers BBR-etager. Næste skridt: åbn `bygninger.glb` i Unity (glTFast) og sammenlign med CityWeft's gratis forhåndsvisning.
+**Status 2026-11-03: bygget i v0.5.0** (`sideprojekt_3d/model3d.py`, output i run'ens `output/model/`). Testcasen: 8 bygninger. Tøndetagene afviger 0,22–0,39 m i snit fra DHM efter tilpasning med mindste kvadrater. To bygninger er usikre og får fladt tag: én dækket af træer, og en overdækning fra 2025 (bygget efter punktskyen), hvor højden kommer fra GeoDanmarks fotogrammetrisk målte tagkant (±0,15 m). GeoDanmarks tagkant bruges kun, når den er målt (ikke `Manuel`); ellers BBR-etager.
+
+**Dobbelttjek 2026-11-03:** alle 8 GeoDanmark-bygninger ligger helt på ejendommen og har BBR (ingen delvist udeladt). Usikre tage (dækket af træer eller bygget efter skanningen) får ikke højde fra DHM, som ellers måler trækronerne: udhuset (nr. 7) gik fra 6,1 m til 3,0 m (BBR-etager). GeoDanmark-omridset er målt ved tagkanten, så det er 8–25 % større end BBR's bebyggede areal (ydervæg); facaderne i modellen står derfor ved tagkanten. Ikke tjekket: BBR-bygninger på ejendommen uden omrids i GeoDanmark (GraphQL kan kun slå op på id). Næste skridt: åbn `bygninger.glb` i Unity (glTFast) og sammenlign med CityWeft's gratis forhåndsvisning.
 
 Før billederne laves en 3D-model af bygningerne på matriklen ud fra data, vi allerede har i v0.4:
 
