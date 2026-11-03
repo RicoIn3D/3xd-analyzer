@@ -340,7 +340,7 @@ def main() -> None:
     if dtm is not None:
         try:
             model_info = model3d.write(out / "model", f"Analyzer 3D – BFE {args.bfe}", grid, parcel, dtm, dsm, classes,
-                                       background, bld_records)
+                                       background, bld_records, obliques=skraa_images)
         except Exception as e:  # the model is an extra; never lose the run over it
             model_info = {"fejl": redact(f"{type(e).__name__}: {e}")}
             traceback.print_exc()

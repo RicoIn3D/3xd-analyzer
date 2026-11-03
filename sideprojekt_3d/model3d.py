@@ -11,13 +11,20 @@ glTF is Y-up and right-handed: x = east, y = up, z = south.
 """
 
 import base64
+import io
 import json
 import math
+import os
 import struct
 from pathlib import Path
 
 import numpy as np
+import rasterio
+import requests
 import shapely
+from PIL import Image
+from rasterio.enums import Resampling
+from rasterio.windows import Window
 from shapely import affinity
 from shapely.geometry import Polygon, box
 from shapely.geometry.polygon import orient
@@ -26,6 +33,7 @@ from analyzer import VERSION
 from analyzer.buildings import NO_BBR_COLOR, TAG_COLORS, public
 from analyzer.classes import COLORS, UDENFOR
 from analyzer.grid import Grid
+from analyzer.sources.skraafoto import STAC_URL, project
 
 DEFAULTS = {
     "terraen_skridt_px": 2,       # terrain mesh uses every n-th grid cell (0.5 m on the 0.25 m grid)
@@ -35,7 +43,11 @@ DEFAULTS = {
     "afvigelse_skala_m": 1.0,     # deviation shown as full red (roof higher) or blue (lower) in the measured roof
     "tilpasning_min_celler": 20,  # roof heights are fitted to the surface model when this many roof cells are seen
     "geodanmark_max_noejagtighed_m": 0.5,  # GeoDanmark roof-edge height is used when measured at least this precisely
-    "tilpasning_afviger_m": 0.5,  # cells further than this from the fit (chimneys, trees) are dropped and refitted
+    "tilpasning_afviger_m": 0.5,
+    "skraafoto_min_vinkel": 0.25,  # an oblique textures a triangle only when it faces the camera at least this much
+                                   # (cosine between the triangle normal and the direction to the camera)
+    "skraafoto_max_side_px": 3000,  # texture size limit per oblique
+    "skraafoto_margin_px": 60,  # cells further than this from the fit (chimneys, trees) are dropped and refitted
 }
 
 # BBR byg032 wall material
@@ -322,6 +334,85 @@ def _deviation_colors(diff: np.ndarray, scale: float) -> np.ndarray:
     return np.where(t >= 0, grey + (red - grey) * t, grey + (blue - grey) * -t).astype("uint8")
 
 
+# Obliques as textures -----------------------------------------------------------------------------------------
+
+def fetch_obliques(images: list[dict], area, z_range: tuple[float, float], p: dict = DEFAULTS) -> list[dict]:
+    """Clean crops of the run's oblique photos (no outline drawn) covering the area from ground to roof height.
+
+    images are the run's skråfoto entries (id and dato). The STAC item gives the camera; the COG itself is public.
+    """
+    token = os.environ.get("DATAFORSYNINGEN_TOKEN", "").strip()
+    x0, y0, x1, y1 = area.bounds
+    corners = [(x, y, z) for x in (x0, x1) for y in (y0, y1) for z in z_range]
+    out = []
+    for img in images:
+        r = requests.get(f"{STAC_URL}/collections/skraafotos{img['dato'][:4]}/items/{img['id']}",
+                         headers={"token": token}, timeout=60)
+        if r.status_code != 200:
+            continue
+        item = r.json()
+        props = item["properties"]
+        px = np.array([project(props, *c) for c in corners])
+        margin = p["skraafoto_margin_px"]
+        c0, r0 = int(px[:, 0].min()) - margin, int(px[:, 1].min()) - margin
+        c1, r1 = int(px[:, 0].max()) + margin, int(px[:, 1].max()) + margin
+        with rasterio.open(item["assets"]["data"]["href"]) as ds:
+            c0, r0 = max(c0, 0), max(r0, 0)
+            w, h = min(c1, ds.width) - c0, min(r1, ds.height) - r0
+            if w <= 0 or h <= 0:
+                continue
+            scale = min(1.0, p["skraafoto_max_side_px"] / max(w, h))
+            shape = (3, max(round(h * scale), 1), max(round(w * scale), 1))
+            data = ds.read([1, 2, 3], window=Window(c0, r0, w, h), out_shape=shape, resampling=Resampling.bilinear)
+        out.append({"retning": props["direction"], "id": img["id"], "dato": img["dato"], "props": props,
+                    "c0": c0, "r0": r0, "w": w, "h": h, "image": np.moveaxis(data, 0, -1),
+                    "camera": np.asarray(props["pers:perspective_center"], dtype="float64")})
+    return out
+
+
+def _uv(ob: dict, pts) -> np.ndarray | None:
+    """Texture coordinates of ENU points in an oblique crop, or None when a point falls outside it."""
+    uv = []
+    for x, y, z in pts:
+        col, row = project(ob["props"], x, y, z)
+        u, v = (col - ob["c0"]) / ob["w"], (row - ob["r0"]) / ob["h"]
+        if not (0 <= u <= 1 and 0 <= v <= 1):
+            return None
+        uv.append((u, v))
+    return np.array(uv)
+
+
+def _texture_split(mesh: Mesh, obliques: list[dict], p: dict):
+    """Give each triangle the oblique that looks most squarely at it. Returns the untextured rest and textured chunks.
+
+    Occlusion is not handled: a tree or a neighbour in front of a facade ends up painted on it.
+    """
+    rest = Mesh()
+    groups = {}
+    for a, b, c, n, color in mesh._tris:
+        centroid = (a + b + c) / 3
+        best, best_score, best_uv = None, p["skraafoto_min_vinkel"], None
+        for i, ob in enumerate(obliques):
+            to_camera = ob["camera"] - centroid
+            score = float(np.dot(n, to_camera / np.linalg.norm(to_camera)))
+            if score <= best_score:
+                continue
+            uv = _uv(ob, (a, b, c))
+            if uv is not None:
+                best, best_score, best_uv = i, score, uv
+        if best is None:
+            rest._tris.append((a, b, c, n, color))
+        else:
+            groups.setdefault(best, []).append((a, b, c, n, best_uv))
+    chunks = []
+    for i, tris in groups.items():
+        pos = np.array([v for t in tris for v in t[:3]])
+        nrm = np.repeat(np.array([t[3] for t in tris]), 3, axis=0)
+        uv = np.vstack([t[4] for t in tris])
+        chunks.append((pos, nrm, uv, np.arange(len(pos)), i))
+    return rest, chunks
+
+
 # glTF ----------------------------------------------------------------------------------------------------------
 
 def _srgb_to_linear(c: np.ndarray) -> np.ndarray:
@@ -329,8 +420,10 @@ def _srgb_to_linear(c: np.ndarray) -> np.ndarray:
     return np.where(s <= 0.04045, s / 12.92, ((s + 0.055) / 1.055) ** 2.4)
 
 
-def _glb(parts: list[dict], origin: tuple[float, float, float], root: str, extras: dict) -> bytes:
-    """Binary glTF with one node per part. Each part: name, mesh (Mesh), extras (optional)."""
+def _glb(parts: list[dict], origin: tuple[float, float, float], root: str, extras: dict,
+         images: list[np.ndarray] | None = None) -> bytes:
+    """Binary glTF with one node per part. Each part: name, mesh (Mesh), extras (optional) and textured (optional):
+    chunks (positions, normals, uv, indices, image index) drawn unlit with the given JPEG-encoded images."""
     x0, y0, z0 = origin
     gltf = {"asset": {"version": "2.0", "generator": f"Analyzer {VERSION}", "extras": extras},
             "scene": 0, "scenes": [{"nodes": [0]}], "nodes": [{"name": root, "children": []}], "meshes": [],
@@ -339,6 +432,34 @@ def _glb(parts: list[dict], origin: tuple[float, float, float], root: str, extra
                                                     "roughnessFactor": 0.9}}],
             "accessors": [], "bufferViews": []}
     blob = bytearray()
+
+    def raw_view(data: bytes) -> int:
+        while len(blob) % 4:
+            blob.append(0)
+        gltf["bufferViews"].append({"buffer": 0, "byteOffset": len(blob), "byteLength": len(data)})
+        blob.extend(data)
+        return len(gltf["bufferViews"]) - 1
+
+    texture_material = {}
+    if images:
+        gltf["extensionsUsed"] = ["KHR_materials_unlit"]
+        gltf["samplers"] = [{"magFilter": 9729, "minFilter": 9987, "wrapS": 33071, "wrapT": 33071}]
+        gltf["images"], gltf["textures"] = [], []
+        for i, img in enumerate(images):
+            buf = io.BytesIO()
+            Image.fromarray(img).save(buf, format="JPEG", quality=85)
+            gltf["images"].append({"bufferView": raw_view(buf.getvalue()), "mimeType": "image/jpeg"})
+            gltf["textures"].append({"sampler": 0, "source": i})
+            gltf["materials"].append({"name": f"skraafoto {i}", "doubleSided": True,
+                                      "extensions": {"KHR_materials_unlit": {}},
+                                      "pbrMetallicRoughness": {"baseColorTexture": {"index": i},
+                                                               "metallicFactor": 0.0, "roughnessFactor": 1.0}})
+            texture_material[i] = len(gltf["materials"]) - 1
+
+    def to_gltf(pos, nrm):
+        # ENU (east, north, up) -> glTF (x = east, y = up, z = south), relative to the origin
+        return (np.column_stack([pos[:, 0] - x0, pos[:, 2] - z0, -(pos[:, 1] - y0)]).astype("float32"),
+                np.column_stack([nrm[:, 0], nrm[:, 2], -nrm[:, 1]]).astype("float32"))
 
     def accessor(arr: np.ndarray, component: int, kind: str, target: int, normalized=False, bounds=False) -> int:
         while len(blob) % 4:
@@ -355,21 +476,27 @@ def _glb(parts: list[dict], origin: tuple[float, float, float], root: str, extra
         return len(gltf["accessors"]) - 1
 
     for part in parts:
+        primitives = []
         arrays = part["mesh"].arrays()
-        if arrays is None:
+        if arrays is not None:
+            pos, nrm, col, idx = arrays
+            gpos, gnrm = to_gltf(pos, nrm)
+            rgba = np.column_stack([_srgb_to_linear(col.astype("float64")), np.ones(len(col))])
+            gcol = np.round(rgba * 65535).astype("uint16")
+            primitives.append({"attributes": {"POSITION": accessor(gpos, 5126, "VEC3", 34962, bounds=True),
+                                              "NORMAL": accessor(gnrm, 5126, "VEC3", 34962),
+                                              "COLOR_0": accessor(gcol, 5123, "VEC4", 34962, normalized=True)},
+                               "indices": accessor(idx.astype("uint32"), 5125, "SCALAR", 34963), "material": 0})
+        for pos, nrm, uv, idx, image in part.get("textured", []):
+            gpos, gnrm = to_gltf(pos, nrm)
+            primitives.append({"attributes": {"POSITION": accessor(gpos, 5126, "VEC3", 34962, bounds=True),
+                                              "NORMAL": accessor(gnrm, 5126, "VEC3", 34962),
+                                              "TEXCOORD_0": accessor(uv.astype("float32"), 5126, "VEC2", 34962)},
+                               "indices": accessor(idx.astype("uint32"), 5125, "SCALAR", 34963),
+                               "material": texture_material[image]})
+        if not primitives:
             continue
-        pos, nrm, col, idx = arrays
-        # ENU (east, north, up) -> glTF (x = east, y = up, z = south), relative to the origin
-        gpos = np.column_stack([pos[:, 0] - x0, pos[:, 2] - z0, -(pos[:, 1] - y0)]).astype("float32")
-        gnrm = np.column_stack([nrm[:, 0], nrm[:, 2], -nrm[:, 1]]).astype("float32")
-        rgba = np.column_stack([_srgb_to_linear(col.astype("float64")), np.ones(len(col))])
-        gcol = np.round(rgba * 65535).astype("uint16")
-        attributes = {"POSITION": accessor(gpos, 5126, "VEC3", 34962, bounds=True),
-                      "NORMAL": accessor(gnrm, 5126, "VEC3", 34962),
-                      "COLOR_0": accessor(gcol, 5123, "VEC4", 34962, normalized=True)}
-        indices = accessor(idx.astype("uint32"), 5125, "SCALAR", 34963)
-        gltf["meshes"].append({"name": part["name"], "primitives": [
-            {"attributes": attributes, "indices": indices, "material": 0}]})
+        gltf["meshes"].append({"name": part["name"], "primitives": primitives})
         node = {"name": part["name"], "mesh": len(gltf["meshes"]) - 1}
         if part.get("extras"):
             node["extras"] = part["extras"]
@@ -388,8 +515,12 @@ def _glb(parts: list[dict], origin: tuple[float, float, float], root: str, extra
 # Output --------------------------------------------------------------------------------------------------------
 
 def write(out_dir: Path, title: str, grid: Grid, parcel, dtm: np.ndarray, dsm: np.ndarray | None,
-          classes: np.ndarray, ortho: np.ndarray | None, records: list[dict], p: dict = DEFAULTS) -> dict:
-    """Write terrain and building models as .glb, model.json and a self-contained model.html. Returns run.json info."""
+          classes: np.ndarray, ortho: np.ndarray | None, records: list[dict], obliques: list[dict] | None = None,
+          p: dict = DEFAULTS) -> dict:
+    """Write terrain and building models as .glb, model.json and a self-contained model.html. Returns run.json info.
+
+    obliques are the run's skråfoto entries (id, dato); with them the buildings are also written photo-textured.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     inside = classes != UDENFOR
     cx, cy = (parcel.centroid.x, parcel.centroid.y) if parcel is not None else (
@@ -398,10 +529,11 @@ def write(out_dir: Path, title: str, grid: Grid, parcel, dtm: np.ndarray, dsm: n
     meta = {"origo_epsg25832_dvr90": list(origin), "akser": "glTF, Y op: x = øst, y = op, z = syd. Enhed: meter"}
     files = {}
 
-    def save(name: str, parts: list[dict], description: str) -> None:
-        parts = [pt for pt in parts if pt["mesh"].arrays() is not None]
+    def save(name: str, parts: list[dict], description: str, images: list[np.ndarray] | None = None) -> None:
+        parts = [pt for pt in parts if pt["mesh"].arrays() is not None or pt.get("textured")]
         if parts:
-            (out_dir / name).write_bytes(_glb(parts, origin, name.removesuffix(".glb"), {**meta, "indhold": description}))
+            (out_dir / name).write_bytes(_glb(parts, origin, name.removesuffix(".glb"),
+                                              {**meta, "indhold": description}, images))
             files[name] = description
 
     step = p["terraen_skridt_px"]
@@ -441,6 +573,26 @@ def write(out_dir: Path, title: str, grid: Grid, parcel, dtm: np.ndarray, dsm: n
                                  "extras": {"nr": r["nr"], "model_afvigelse_m": r["model_afvigelse_m"]}})
     save("bygninger.glb", simple, "Bygninger, simpel model: omrids fra GeoDanmark, tagform og højder fra DHM, "
                                   "farver fra BBR (tag og ydervæg)")
+    textured_info = None
+    if obliques and parcel is not None and simple:
+        roofs = [r["_roof"] for r in records if r.get("_roof") is not None]
+        z_range = (float(np.nanmin(dtm[inside])), max(rf["ground"] + rf["ridge"] for rf in roofs) + 1.0)
+        crops = fetch_obliques(obliques, parcel, z_range, p)
+        if crops:
+            textured, used = [], set()
+            for r in records:
+                if r.get("_roof") is None:
+                    continue
+                mesh = Mesh()
+                _building_mesh(r, mesh, p)
+                rest, chunks = _texture_split(mesh, crops, p)
+                used |= {c[4] for c in chunks}
+                textured.append({"name": f"bygning {r['nr']}", "mesh": rest, "textured": chunks, "extras": public(r)})
+            save("bygninger_skraafoto.glb", textured, "Bygninger med skråfotos som tekstur (hver flade får det billede, "
+                 "der ser mest vinkelret på den). Træer og naboer foran en facade kommer med på facaden",
+                 [c["image"] for c in crops])
+            textured_info = [{"retning": c["retning"], "id": c["id"], "dato": c["dato"], "brugt": i in used}
+                             for i, c in enumerate(crops)]
     save("tag_maalt.glb", measured, "Tagflader målt i DHM overflade, farvet efter afvigelse fra den simple model "
                                     f"(rød = højere, blå = lavere, fuld farve ved {p['afvigelse_skala_m']} m)")
 
@@ -452,7 +604,7 @@ def write(out_dir: Path, title: str, grid: Grid, parcel, dtm: np.ndarray, dsm: n
             .replace("__DATA__", json.dumps({"files": files, "glb": payload, "meta": meta}, ensure_ascii=False)))
     (out_dir / "model.html").write_text(html, encoding="utf-8")
     return {"origo_epsg25832_dvr90": list(origin), "filer": list(files), "bygninger": len(simple),
-            "tage_maalt": len(measured)}
+            "tage_maalt": len(measured), "skraafotos": textured_info}
 
 
 MODEL_TEMPLATE = """<!doctype html>
@@ -522,8 +674,11 @@ window.addEventListener("resize", resize);
 const loader = new GLTFLoader();
 const groups = {};
 const toBuffer = b64 => Uint8Array.from(atob(b64), c => c.charCodeAt(0)).buffer;
-const defaults = { "terraen.glb": true, "terraen_klasser.glb": false, "bygninger.glb": true, "tag_maalt.glb": false };
-const exclusive = ["terraen.glb", "terraen_klasser.glb"];  // two colourings of the same surface
+const textured = "bygninger_skraafoto.glb" in DATA.glb;
+const defaults = { "terraen.glb": true, "terraen_klasser.glb": false, "bygninger.glb": !textured,
+                   "bygninger_skraafoto.glb": true, "tag_maalt.glb": false };
+// Alternative looks of the same surface: only one of each group is shown at a time
+const exclusiveGroups = [["terraen.glb", "terraen_klasser.glb"], ["bygninger.glb", "bygninger_skraafoto.glb"]];
 
 await Promise.all(Object.entries(DATA.glb).map(([name, b64]) => new Promise(done =>
   loader.parse(toBuffer(b64), "", gltf => { groups[name] = gltf.scene; scene.add(gltf.scene); done(); }))));
@@ -537,7 +692,8 @@ for (const [name, text] of Object.entries(DATA.files)) {
   const box = label.querySelector("input");
   box.addEventListener("change", () => {
     groups[name].visible = box.checked;
-    if (box.checked && exclusive.includes(name)) for (const other of exclusive) if (other !== name && groups[other]) {
+    const group = exclusiveGroups.find(g => g.includes(name));
+    if (box.checked && group) for (const other of group) if (other !== name && groups[other]) {
       groups[other].visible = false;
       layers.querySelector(`[data-name="${other}"]`).checked = false;
     }

@@ -31,6 +31,35 @@ Idé: lav en 3D-model (Gaussian splatting eller farvelagt punktsky) af ejendomme
 4. **Flere årgange:** tilføj 2023 (tættest på 2025, mindst ændring), med samlet finjustering af kameraer.
 5. **Visning:** GaussianSplats3D eller Spark (three.js) i `viewer.html` eller en separat side.
 
+## Opgaver
+
+### Opgave 1: tagudhæng, facaden skal stå ved ydervæggen (ikke startet)
+
+Velegnet til en subagent. Oprettet 2026-11-03.
+
+**Problem:** GeoDanmark-omridset (`metode3D = "Tag"`) er målt ved tagkanten, dvs. med tagudhæng. BBR's `byg041BebyggetAreal` er målt ved ydervæggen. På testcasen er GeoDanmark 8–25 % større (fx 162,1 m² mod 133 m²). I `bygninger.glb` står facaderne derfor ved tagkanten, og bygningerne ser for brede ud.
+
+**Mål:** et estimat af udhænget pr. bygning (i meter) og et vægomrids, så modellen får facader ved ydervæggen og et tag, der rager ud over dem.
+
+**Mulige metoder, der skal afprøves og sammenlignes:**
+1. **BBR-areal:** find det indadgående buffer `d`, så arealet af `omrids.buffer(-d)` = BBR's bebyggede areal. Simpelt og findes for alle bygninger med BBR. Svagt hvis BBR-arealet er forkert eller medtager udestue/carport.
+2. **Punktskyen:** vægpunkter (klasse 6 under tagfladen) eller kanten, hvor tagpunkter slutter, set mod terrænpunkter tæt på facaden.
+3. **Skråfotos:** facaden ses direkte i de fire skrå retninger. Kameraerne er kendte (`pers:*`, se `analyzer/sources/skraafoto.py`), så omridset og et kandidat-vægomrids kan tegnes ind og sammenlignes visuelt eller med kantdetektion. Det er her, skråfotos første gang kan bruges på modellen.
+4. **Typiske værdier:** dansk byggeskik (fx 0,3–0,6 m for rækkehuse) som sanity check, ikke som metode.
+
+**Data:** run `runs/2026-11-03_1752_bfe-5522814/`: `output/bygninger.csv` (`grundplan_m2`, `bebygget_areal_bbr_m2`), `output/bygninger.geojson`, skråfotos i `output/skraafoto/` og metadata i `run.json` (`skraafoto`). Punktsky i `cache/dhm/`.
+
+**Leverance:** en kort vurdering af metoderne med tal pr. bygning på testcasen, en anbefaling og et forslag til ændring i `sideprojekt_3d/model3d.py` (fx felt `model_udhaeng_m` i `bygninger.csv` og vægge ved `omrids.buffer(-udhæng)`). Ingen ændring i `analyzer/` uden aftale.
+
+### Opgave 2: skråfotos som tekstur på modellen (første version 2026-11-03)
+
+**Lavet:** `bygninger_skraafoto.glb`. Sideprojektet henter selv rene udsnit af run'ens fem skråfotos (pipelinens egne JPG'er har ejendomsgrænsen tegnet ind og er skaleret ned). Hver trekant får det billede, der ser mest vinkelret på den (`skraafoto_min_vinkel`), og UV beregnes med kameraets kendte orientering (`project()` fra `analyzer/sources/skraafoto.py`). Teksturerne ligger som JPEG i filen og vises uden lys (`KHR_materials_unlit`), fordi fotoet allerede har lyset. På testcasen bruges alle fem billeder (lodret og fire skrå, 6. april 2025). En kontrol, hvor trekanterne er tegnet ind i billederne, viser, at tage og facader rammer præcist.
+
+**Mangler:**
+- Okklusion: et træ eller en nabo foran en facade males på facaden. Kan løses ved at teste synlighed mod DHM overflade (stråle fra kamera til trekant).
+- Facaderne står ved tagkanten (opgave 1), så facadefotoet trækkes lidt skævt ud ved udhænget.
+- Terrænet har stadig ortofoto-farver pr. vertex, ikke skråfoto-tekstur.
+
 ## Klimadatastyrelsens 3D Ortofoto (3DO)
 
 - Labs-prototype på Dataforsyningen: https://dataforsyningen.dk/labs/4963. Tredimensionelt luftfoto lavet ud fra skråfotos, hvor facader kan ses.
