@@ -60,6 +60,10 @@ MCP-server valgt 2026-11-03: **MCP for Unity fra Coplay**, https://github.com/Co
 6. Genstart Claude Code, så MCP-værktøjerne indlæses.
 7. Træk `.glb`-filerne fra en run (`runs/<run>/output/model/`) ind i projektets `Assets/`. 1 Unity-enhed = 1 m. Origo og akser står i `model.json`.
 
+**Første scene (2026-11-03):** `Assets/Scenes/Analyzer3D.unity` i "My project". Filerne fra run `2026-11-03_1736_bfe-5522814` ligger i `Assets/Analyzer/<run>/`. Roden "Ejendom BFE 5522814" holder de fire modeller; `terraen` og `bygninger` er tændt, `terraen_klasser` og `tag_maalt` slukket. Skærmbilleder i `Assets/Screenshots/`.
+
+**Faldgrube:** glTFast spejler x-aksen ved import (glTF er højrehåndet, Unity venstrehåndet). Uden rettelse peger øst mod −X og nord mod −Z. Roden er derfor drejet 180° om Y, så +X = øst og +Z = nord.
+
 ### Installeret software (Ricos Mac, 2026-11-03)
 
 | Program | Version | Installeret med | Bruges til |
@@ -69,7 +73,7 @@ MCP-server valgt 2026-11-03: **MCP for Unity fra Coplay**, https://github.com/Co
 | Unity Editor | 6000.6.8f1 (også 6000.6.7f1 installeret) | Unity Hub | Editor til projektet |
 | Unity-projekt "My project" | URP 17.6.0 | Unity Hub, `/Users/ricosorensen/My project` | Visning af 3D-modellen |
 | MCP for Unity (`com.coplaydev.unity-mcp`) | fra `#main` | Package Manager, git-URL | Forbinder Claude Code med editoren. **Bør fastlåses til `#v10.3.0`** (manifest.json) |
-| glTFast (`com.unity.cloud.gltfast`) | ikke installeret endnu | Package Manager | Import af `.glb` |
+| glTFast (`com.unity.cloud.gltfast`) | 6.20.0 | Package Manager (via Claude Code/MCP) | Import af `.glb` |
 
 Claude Code: MCP-serveren `UnityMCP` (HTTP, `http://127.0.0.1:8080/mcp`) er registreret i `~/.claude.json` for både `My project` og `3xd-analyzer` (lokal scope, `claude mcp add --transport http UnityMCP http://127.0.0.1:8080/mcp`). Serveren startes fra Unity (Window → MCP for Unity) og skal køre, før Claude Code kan bruge den.
 
