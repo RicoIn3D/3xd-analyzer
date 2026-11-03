@@ -102,6 +102,9 @@ def _count(grid: Grid, dataset: str, tiles: list[dict]) -> dict:
     files = []
     dates = set()
     veg = []
+    # Laser intensity of ground points, summed per cell; it tells dark asphalt from light stone and gravel
+    i_sum = np.zeros(grid.width * grid.height)
+    i_n = np.zeros(grid.width * grid.height)
     for tile in tiles:
         path = _download(tile, dataset)
         files.append(tile["fileName"])
@@ -118,6 +121,9 @@ def _count(grid: Grid, dataset: str, tiles: list[dict]) -> dict:
                 cls = np.asarray(pts.classification)[m]
                 idx = row * grid.width + col
                 total += int(m.sum())
+                g = cls == 2
+                i_sum += np.bincount(idx[g], np.asarray(pts.intensity)[m][g], grid.width * grid.height)
+                i_n += np.bincount(idx[g], minlength=grid.width * grid.height)
                 v = np.isin(cls, VEGETATION)
                 if v.any():
                     veg.append(np.column_stack([x[m][v], y[m][v], np.asarray(pts.z)[m][v], cls[v]]))
@@ -130,5 +136,7 @@ def _count(grid: Grid, dataset: str, tiles: list[dict]) -> dict:
         raise SourceUnavailable("Punktsky: ingen punkter inden for området")
     area_m2 = (grid.xmax - grid.xmin) * (grid.ymax - grid.ymin)
     return {"antal": counts, "punkter": total, "tæthed_pr_m2": round(total / area_m2, 1), "filer": files,
-            "vegetation": np.vstack(veg) if veg else np.zeros((0, 4)), "datasæt": dataset, "optaget": sorted(dates), "år": _year(dataset, dates),
+            "vegetation": np.vstack(veg) if veg else np.zeros((0, 4)),
+            "intensitet": np.where(i_n > 0, i_sum / np.maximum(i_n, 1), np.nan).reshape(grid.shape),
+            "datasæt": dataset, "optaget": sorted(dates), "år": _year(dataset, dates),
             "fordeling_pct": {CLASSES[c]: round(100 * float(v.sum()) / total, 1) for c, v in counts.items()}}

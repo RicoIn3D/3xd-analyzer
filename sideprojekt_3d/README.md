@@ -74,6 +74,10 @@ Velegnet til en subagent. Oprettet 2026-11-03.
 - Kronebunden kan måles fra punktskyen (laveste vegetationspunkter under kronen).
 - Unity: punkter vises som 1 px i glTFast. Træerne er ikke lagt i Unity-scenen endnu.
 
+### Opgave 4: navngivne materialer pr. overflade (ikke startet, aftalt 2026-11-03)
+
+Terrænet deles i ét mesh pr. arealtype. Belægningen deles yderligere efter de typer, `analyzer/paving.py` allerede finder. Materialerne får faste navne, som Unity og browseren kan erstatte med rigtige materialer (gentagne teksturer, fx fra ambientCG, CC0). Navnene i første omgang er `graes`, `buske`, `asfalt`, `fliser_sten_beton`, `grus` og `belaegning_ukendt`. Senere kan det blive et Unity Terrain med splatmap og græs som grass details.
+
 ## Klimadatastyrelsens 3D Ortofoto (3DO)
 
 - Labs-prototype på Dataforsyningen: https://dataforsyningen.dk/labs/4963. Tredimensionelt luftfoto lavet ud fra skråfotos, hvor facader kan ses.

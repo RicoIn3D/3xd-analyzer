@@ -22,7 +22,7 @@ from shapely.ops import transform as shapely_transform, unary_union
 
 from sideprojekt_3d import model3d
 
-from . import VERSION, classify, outputs
+from . import VERSION, classify, outputs, paving
 from . import buildings as bldg
 from .classes import BYGNING, NAMES, UDENFOR
 from .grid import Grid
@@ -313,6 +313,17 @@ def main() -> None:
     if background is not None:
         outputs.blend_png(out / "kort.png", background, classes)
 
+    # Paving types inside the paving class (draft)
+    paving_types, paving_area = None, None
+    if method == "ortho_dhm":
+        paving_types = paving.classify(classes, background, ndvi, lidar["intensitet"] if lidar else None)
+        paving_area = paving.areas(paving_types, res)
+        outputs.write_geotiff(out / "belaegning.tif", grid, paving_types)
+        paving.png(out / "lag" / "belaegning.png", paving_types)
+        layers.append({"navn": "Belægningstype (udkast)", "fil": "output/lag/belaegning.png", "type": "overlay",
+                       "legende": paving.legend()})
+        hover["belaegning"] = paving_types
+
     # 5. Buildings on the property: BBR attributes and roof shape from the surface model
     bld_records, bld_summary = [], None
     if gdk and gdk["bygninger"]:
@@ -342,12 +353,15 @@ def main() -> None:
             model_info = model3d.write(out / "model", f"Analyzer 3D – BFE {args.bfe}", grid, parcel, dtm, dsm, classes,
                                        background, bld_records, obliques=skraa_images,
                                        gd_trees=gdk["traeer"] if gdk else None,
-                                       vegetation=lidar["vegetation"] if lidar else None)
+                                       vegetation=lidar["vegetation"] if lidar else None,
+                                       paving_types=paving_types)
         except Exception as e:  # the model is an extra; never lose the run over it
             model_info = {"fejl": redact(f"{type(e).__name__}: {e}")}
             traceback.print_exc()
 
     metrics = {"arealer_m2": area, "polygoner": n_polygons}
+    if paving_area:
+        metrics["belaegningstyper_m2"] = paving_area
     if bld_summary:
         metrics["bygninger"] = bld_summary
     if gdk:
@@ -366,13 +380,15 @@ def main() -> None:
         "ejendom_areal_m2": round(parcel.area, 1) if parcel is not None else None, "grid": {"crs": "EPSG:25832", "bbox": grid.bbox, "opløsning_m": res,
                                        "pixels": [grid.width, grid.height]},
         "metode": method, "parametre": params, "bygning_parametre": bldg.DEFAULTS,
+        "belaegning_parametre": paving.DEFAULTS if paving_types is not None else None,
         "model_parametre": model3d.DEFAULTS, "model": model_info, "skraafoto": skraa_images, "note": args.note, "kilder": src.items,
         "argumenter": vars(args),
     }
     (run_dir / "run.json").write_text(json.dumps(run_info, ensure_ascii=False, indent=2), encoding="utf-8")
     outputs.write_viewer(run_dir / "viewer.html", f"Analyzer – BFE {args.bfe}", grid, layers, area, run_info,
                          rasters={**hover, "klasse": classes},
-                         buildings=[bldg.public(r) for r in bld_records], building_summary=bld_summary)
+                         buildings=[bldg.public(r) for r in bld_records], building_summary=bld_summary,
+                         paving_names=paving.TYPE_NAMES)
 
     template = (RUNS / "_skabelon" / "evaluering.md").read_text(encoding="utf-8")
     template = (template.replace("<run-mappe, fx 2026-10-08_1430_bfe-5522814>", run_name)
@@ -388,6 +404,8 @@ def main() -> None:
         print("  ADVARSEL: forhåndsvisning. Arealerne gælder firkanten, ikke ejendommen.")
     for k, v in area.items():
         print(f"  {k:<16}{v:>12,.1f} m²")
+    for k, v in (paving_area or {}).items():
+        print(f"    {k:<26}{v:>10,.1f} m²")
 
 
 def _append_overview(run_name: str, bfe: str, method: str, items: list, metrics: dict, valid_area: bool) -> None:

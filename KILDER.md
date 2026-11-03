@@ -115,6 +115,7 @@ Fuld liste: https://grunddatamodel.datafordeler.dk/objekttypekatalog/GeoDanmark/
 - Målt på testcasen: 24 punkter pr. m². Fordeling i området: 36 % terræn, 48 % høj vegetation, 6 % mellem vegetation, 1 % lav vegetation, 7 % bygning.
 - Klasser (ASPRS): 2 terræn, 3 lav, 4 mellem og 5 høj vegetation, 6 bygning, 9 vand.
 - **Faldgrube:** biler i scanningen fra 2023 er ofte klassificeret som mellem vegetation. Buske fra punktskyen kræver derfor også lidt grønt i ortofotoet (NDVI > 0).
+- **Intensitet (fra v0.6):** laserens refleksion pr. punkt. Middelværdien af terrænpunkterne pr. celle bruges til belægningstyper (`analyzer/paving.py`): asfalt reflekterer svagt, lys sten og grus kraftigt. Den er ukalibreret og afhænger af flyvning og sensor, så pipelinen regner den relativt til medianen af alle terrænpunkter i området. På testcasen ligger terrænpunkterne mellem 1440 og 1976 (10.–90. percentil). Punkterne har også RGB (`red`, `green`, `blue`), som endnu ikke bruges.
 
 ## Andre danske offentlige kilder
 

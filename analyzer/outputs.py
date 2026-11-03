@@ -234,13 +234,13 @@ def accuracy(classes: np.ndarray, ref: np.ndarray) -> dict:
 
 def write_viewer(path: Path, title: str, grid: Grid, layers: list[dict], area: dict, run_info: dict,
                  rasters: dict | None = None, buildings: list | None = None,
-                 building_summary: dict | None = None) -> None:
+                 building_summary: dict | None = None, paving_names: dict | None = None) -> None:
     legend = [{"navn": NAMES[c], "farve": "#%02x%02x%02x" % COLORS[c]} for c in NAMES]
     html = VIEWER_TEMPLATE.replace("__TITLE__", title).replace("__DATA__", json.dumps({
         "width": grid.width, "height": grid.height, "res": grid.res,
         "layers": layers, "areas": area, "legend": legend, "run": run_info,
         "rasters": {k: encode_raster(v, k) for k, v in (rasters or {}).items()},
-        "buildings": buildings or [], "buildingSummary": building_summary,
+        "buildings": buildings or [], "buildingSummary": building_summary, "pavingNames": paving_names or {},
     }, ensure_ascii=False))
     path.write_text(html, encoding="utf-8")
 
@@ -374,7 +374,7 @@ function renderLegends() {
 renderLegends();
 const decode = b => b ? Uint8Array.from(atob(b), c => c.charCodeAt(0)) : null;
 const R = { hoejde: decode(D.rasters.hoejde), ndvi: decode(D.rasters.ndvi), klasse: decode(D.rasters.klasse),
-            bygning: decode(D.rasters.bygning) };
+            bygning: decode(D.rasters.bygning), belaegning: decode(D.rasters.belaegning) };
 const bldByNr = Object.fromEntries(D.buildings.map(b => [b.nr, b]));
 const num = v => v == null ? '?' : v.toLocaleString('da-DK');
 function bldText(b) {
@@ -394,7 +394,8 @@ map.on('mousemove', e => {
   if (row < 0 || col < 0 || row >= D.height || col >= D.width) { ro.hidden = true; return; }
   const i = row * D.width + col, parts = [];
   if (R.bygning && R.bygning[i] && bldByNr[R.bygning[i]]) parts.push(bldText(bldByNr[R.bygning[i]]));
-  else if (R.klasse) parts.push(classNames[R.klasse[i]] || 'Uden for ejendommen');
+  else if (R.klasse) parts.push((classNames[R.klasse[i]] || 'Uden for ejendommen') +
+    (R.belaegning && R.belaegning[i] ? ` (${D.pavingNames[R.belaegning[i]]}, udkast)` : ''));
   if (R.hoejde && R.hoejde[i] !== 255) parts.push('Højde ' + (R.hoejde[i] / 10).toLocaleString('da-DK', { minimumFractionDigits: 1 }) + ' m');
   if (R.ndvi && R.ndvi[i] !== 255) parts.push('NDVI (grønhed) ' + (R.ndvi[i] / 127 - 1).toLocaleString('da-DK', { maximumFractionDigits: 2 }));
   ro.textContent = parts.join(' · '); ro.hidden = parts.length === 0;

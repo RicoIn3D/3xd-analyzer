@@ -39,6 +39,7 @@ from analyzer import VERSION
 from analyzer.buildings import NO_BBR_COLOR, TAG_COLORS, public
 from analyzer.classes import BYGNING, COLORS, TRAEER, UDENFOR
 from analyzer.grid import Grid
+from analyzer.paving import TYPE_COLORS
 from analyzer.sources.skraafoto import STAC_URL, project
 
 DEFAULTS = {
@@ -679,11 +680,13 @@ def _glb(parts: list[dict], origin: tuple[float, float, float], root: str, extra
 
 def write(out_dir: Path, title: str, grid: Grid, parcel, dtm: np.ndarray, dsm: np.ndarray | None,
           classes: np.ndarray, ortho: np.ndarray | None, records: list[dict], obliques: list[dict] | None = None,
-          gd_trees: list[dict] | None = None, vegetation: np.ndarray | None = None, p: dict = DEFAULTS) -> dict:
+          gd_trees: list[dict] | None = None, vegetation: np.ndarray | None = None,
+          paving_types: np.ndarray | None = None, p: dict = DEFAULTS) -> dict:
     """Write terrain and building models as .glb, model.json and a self-contained model.html. Returns run.json info.
 
     obliques are the run's skråfoto entries (id, dato); with them the buildings are also written photo-textured.
     gd_trees are GeoDanmark's Trae/Traegruppe objects and vegetation the point cloud's vegetation points (x, y, z, class).
+    paving_types (analyzer.paving) colour the paving in the class-coloured terrain by type.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     inside = classes != UDENFOR
@@ -704,8 +707,12 @@ def write(out_dir: Path, title: str, grid: Grid, parcel, dtm: np.ndarray, dsm: n
     class_rgb = np.zeros((*classes.shape, 3), dtype="uint8")
     for code, color in COLORS.items():
         class_rgb[classes == code] = color
+    if paving_types is not None:
+        for code, color in TYPE_COLORS.items():
+            class_rgb[paving_types == code] = color
     for name, colors, description in (("terraen.glb", ortho, "Terræn (DHM) med ortofoto-farver"),
-                                      ("terraen_klasser.glb", class_rgb, "Terræn (DHM) farvet efter arealtype")):
+                                      ("terraen_klasser.glb", class_rgb, "Terræn (DHM) farvet efter arealtype"
+                                       + (" og belægningstype (udkast)" if paving_types is not None else ""))):
         if colors is not None:
             mesh = Mesh()
             hf = _heightfield(dtm, inside, colors, grid, step)
