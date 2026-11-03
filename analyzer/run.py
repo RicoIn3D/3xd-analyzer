@@ -105,7 +105,8 @@ def main() -> None:
                          "ejendommens")
     ap.add_argument("--center", help="x,y i EPSG:25832. Kun sammen med --uden-matrikel")
     ap.add_argument("--size", type=float, default=200, help="sidelængde i meter for firkanten omkring --center")
-    ap.add_argument("--orto-years", default="2025,2024,2023", help="ortofoto-årgange, nyeste først")
+    ap.add_argument("--orto-years", default="2026,2025,2024,2023",
+                    help="ortofoto-årgange, nyeste først. Årgange, der ikke er udgivet endnu, springes over")
     ap.add_argument("--s2-years", default="2025,2024", help="Sentinel-2 somre")
     ap.add_argument("--uden-punktsky", action="store_true", help="spring punktskyen over (stor download)")
     ap.add_argument("--note", default="", help="fritekst om hvad denne run afprøver")
@@ -184,16 +185,22 @@ def main() -> None:
     if has_token:
         ortho_years = [int(y) for y in args.orto_years.split(",")]
         for year in ortho_years:
+            orto_index = len(src.items)
             rgb = src.fetch(f"Ortofoto {year} RGB (Dataforsyningen)", dataforsyningen.orthophoto, grid, year)
             if rgb is not None:
+                src.items[orto_index]["lag"] = rgb["lag"]
+                rgb = rgb["billede"]
                 outputs.rgb_png(run_dir / "output" / "lag" / f"orto_{year}.png", rgb)
                 layers.append({"navn": f"Ortofoto {year}", "fil": f"output/lag/orto_{year}.png", "type": "base"})
                 background = rgb if background is None else background
         cir, cir_year = None, None
         for year in ortho_years:
+            orto_index = len(src.items)
             cir = src.fetch(f"Ortofoto {year} CIR/nær-infrarød (Dataforsyningen)", dataforsyningen.orthophoto,
                             grid, year, cir=True)
             if cir is not None:
+                src.items[orto_index]["lag"] = cir["lag"]
+                cir = cir["billede"]
                 cir_year = year
                 outputs.rgb_png(run_dir / "output" / "lag" / f"orto_{year}_cir.png", cir)
                 layers.append({"navn": f"Ortofoto {year} CIR", "fil": f"output/lag/orto_{year}_cir.png",
@@ -217,12 +224,12 @@ def main() -> None:
             lidar = None
             if not args.uden_punktsky:
                 pc_index = len(src.items)
-                lidar = src.fetch("DHM punktsky 2023 (Datafordeler)", punktsky.punktsky, grid)
+                lidar = src.fetch("DHM punktsky (Datafordeler)", punktsky.punktsky, grid)
                 if lidar:
-                    src.items[pc_index].update({k: lidar[k] for k in ("punkter", "tæthed_pr_m2", "filer",
-                                                                       "fordeling_pct")})
+                    src.items[pc_index].update({k: lidar[k] for k in ("datasæt", "år", "punkter", "tæthed_pr_m2",
+                                                                       "filer", "optaget", "fordeling_pct")})
                     outputs.lidar_png(run_dir / "output" / "lag" / "punktsky.png", lidar["antal"])
-                    layers.append({"navn": "Punktsky: klasser (DHM 2023)", "fil": "output/lag/punktsky.png",
+                    layers.append({"navn": f"Punktsky: klasser (DHM {lidar['år']})", "fil": "output/lag/punktsky.png",
                                    "type": "overlay", "info": outputs.LAYER_INFO["punktsky"]})
             classes = classify.ortho_dhm(ndvi, ndsm, buildings, params, lidar["antal"] if lidar else None)
             if parcel is not None:
@@ -311,7 +318,7 @@ def main() -> None:
         bbr = src.fetch("BBR bygninger (Datafordeler GraphQL)", datafordeler.bbr_buildings,
                         [b["properties"]["BBRUUID"] for b in gdk["bygninger"] if b["properties"].get("BBRUUID")])
         bld_records = bldg.analyse(gdk["bygninger"], bbr, grid, parcel, dsm, dtm,
-                                   lidar["antal"] if lidar else None)
+                                   lidar["antal"] if lidar else None, lidar["år"] if lidar else None)
         if bld_records:
             bld_summary = bldg.summary(bld_records)
             if bbr is not None:

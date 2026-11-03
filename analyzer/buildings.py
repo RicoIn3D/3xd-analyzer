@@ -66,9 +66,6 @@ DEFAULTS = {
     "punktsky_min_daekning": 0.3,   # below this share of usable roof cells the roof is marked as covered
     "terraen_ring_m": (1.0, 4.0),   # ground level is the terrain model in this ring outside the footprint
 }
-POINT_CLOUD_YEAR = 2023
-
-
 def _label(table: dict, code) -> str | None:
     if code in (None, ""):
         return None
@@ -139,9 +136,10 @@ def _roof_shape(slope: np.ndarray, aspect: np.ndarray, inner: np.ndarray, axis_d
 
 
 def analyse(footprints: list[dict], bbr: dict | None, grid: Grid, parcel, dsm: np.ndarray | None,
-            dtm: np.ndarray | None, lidar: dict | None = None, p: dict = DEFAULTS) -> list[dict]:
+            dtm: np.ndarray | None, lidar: dict | None = None, lidar_year: int | None = None,
+            p: dict = DEFAULTS) -> list[dict]:
     """One record per building on the property. footprints come from GeoDanmark (EPSG:25832).
-    lidar is the point count per class and cell from the point cloud (optional)."""
+    lidar is the point count per class and cell from the point cloud (optional), lidar_year its scan year."""
     slope = aspect = None
     if dsm is not None:
         slope, aspect = _slopes(dsm, grid.res, p["glatning_px"])
@@ -198,7 +196,7 @@ def analyse(footprints: list[dict], bbr: dict | None, grid: Grid, parcel, dsm: n
                 inner = seen
             rec.update(_roof_shape(slope, aspect, inner, axis, p))
             if rec["tag_daekning"] is not None and rec["tag_daekning"] < p["punktsky_min_daekning"]:
-                why = (f"bygget efter punktskyen ({POINT_CLOUD_YEAR})" if year and year > POINT_CLOUD_YEAR
+                why = (f"bygget efter punktskyen ({lidar_year})" if year and lidar_year and year > lidar_year
                        else "tag dækket af træer")
                 rec["tagform"] = f"usikker: {why}"
                 rec["taghaeldning_grader"] = rec["tagareal_m2"] = None

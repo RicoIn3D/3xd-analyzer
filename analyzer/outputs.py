@@ -82,7 +82,7 @@ LAYER_INFO = {
     "osm": "OpenStreetMap: frivilligt kortlagte data. Kun til kontrol, ikke facit.",
     "worldcover": "ESA WorldCover: europæisk arealdækkekort i 10 m opløsning. Grov baseline.",
     "sentinel2": "Sentinel-2: satellitbilleder fra EU's Copernicus, 10 m opløsning. Median af skyfrie sommerscener.",
-    "punktsky": ("Danmarks Højdemodels punktsky (laserscanning 2023). Viser den klasse, de fleste laserpunkter i "
+    "punktsky": ("Danmarks Højdemodels punktsky (laserscanning, årstal står i lagets navn). Viser den klasse, de fleste laserpunkter i "
                  "området har: mørkegrøn = høj vegetation (træer), mellemgrøn = mellem vegetation (buske), "
                  "lysegrøn = lav vegetation, rød = bygning, grå = terræn. Bruges til at afgøre træer og buske."),
     "ejendom": "Ejendomsgrænsen fra matriklen (samlet fast ejendom). Arealer regnes kun indenfor.",

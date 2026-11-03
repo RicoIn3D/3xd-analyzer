@@ -19,9 +19,14 @@ Pipelinen kører i Docker. `run.sh` bygger imaget og sender argumenterne videre 
 ./run.sh --bfe 5522814 --uden-matrikel --center 558376,6369071 --size 400   # kun forhåndsvisning
 ```
 
-Lokalt uden Docker: `.venv/` findes. Kør `pip install -r requirements.txt` og derefter `python -m analyzer.run ...` med `.env` indlæst. Der er ingen tests, linter eller build-trin. En ændring verificeres med en run og `viewer.html`.
+Lokalt uden Docker: opret `.venv/` (git-ignoreret), kør `pip install -r requirements.txt` og derefter `python -m analyzer.run ...` med `.env` indlæst. Der er ingen tests, linter eller build-trin. En ændring verificeres med en run og `viewer.html`.
 
-Kræver `.env` (skabelon i `.env.example`). Uden `DATAFORSYNINGEN_TOKEN` falder pipelinen tilbage til Sentinel-2-metoden på 1 m grid i stedet for 0,25 m.
+Kræver `.env` (skabelon i `.env.example`):
+- `DATAFORSYNINGEN_TOKEN`: ortofoto, DHM og skråfotos. Uden den falder pipelinen tilbage til Sentinel-2-metoden på 1 m grid i stedet for 0,25 m.
+- `DATAFORDELER_API_KEY` + `DATAFORDELER_<DAR|BBR|MAT>_VERSION`: MAT (ejendommens polygon), BBR og punktsky. Uden MAT kræves `--omraade` eller `--uden-matrikel`.
+- `CDSE_CLIENT_ID`/`CDSE_CLIENT_SECRET`: Sentinel-2.
+
+Dataforsyningens WMS hentes i ét kald pr. lag med højst 4000 px pr. side (`MAX_PIXELS`), dvs. ca. 1 km ved 0,25 m.
 
 ## Arkitektur
 
@@ -31,7 +36,8 @@ Kræver `.env` (skabelon i `.env.example`). Uden `DATAFORSYNINGEN_TOKEN` falder 
 - `analyzer/classify.py`: regelbaserede metoder. `DEFAULTS` holder alle parametre pr. metode, og de skrives i `run.json`. Metoden vælges ud fra tilgængelige data:
   - `ortho_dhm` (hovedmetode): NDVI fra CIR-ortofoto + nDSM (DHM overflade minus terræn). Punktskyens ASPRS-vegetationsklasser afgør træer/buske, når den findes. Bygningsmaske fra GeoDanmark, OSM som fallback.
   - `sentinel2` (fallback uden token): Sentinel-2 NDVI + ESA WorldCover.
-- `analyzer/buildings.py`: bygninger på ejendommen (fra v0.4). GeoDanmark-omrids kobles til BBR via `BBRUUID` (tagmateriale, ydervæg, anvendelse, år). Tagform, hældning, tagareal og højde beregnes fra DHM overflade. Kun celler med bygningspunkter i punktskyen (klasse 6) bruges, så træer over tag springes over. Højde måles mod terræn i en ring uden for omridset, fordi DTM er interpoleret under bygninger. Output: `bygninger.csv`, `bygninger.geojson`, lag `tagmateriale.png` og hover i viewer.
+- `analyzer/buildings.py`: bygninger på ejendommen (fra v0.4). GeoDanmark-omrids kobles til BBR via `BBRUUID` (tagmateriale, ydervæg, anvendelse, år). Tagform, hældning, tagareal og højde beregnes fra DHM overflade. Kun celler med bygningspunkter i punktskyen (klasse 6) bruges, så træer over tag springes over. Højde måles mod terræn i en ring uden for omridset, fordi DTM er interpoleret under bygninger. Output: `bygninger.csv`, `bygninger.geojson`, lag `tagmateriale.png` og hover i viewer. Har sin egen `DEFAULTS`, som skrives i `run.json` som `bygning_parametre`.
+- `analyzer/sources/skraafoto.py`: henter skråfotos over ejendommen (STAC) og projicerer omridset ind i billederne. Kun til visuel kontrol, indgår ikke i klassificeringen.
 - `analyzer/classes.py`: klassekoder i `klasser.tif`. `0 = UDENFOR` (uden for ejendommen). `BYGNING` tæller ikke som udeareal (`OUTDOOR`).
 - `analyzer/outputs.py`: GeoTIFF, GeoJSON-polygoner, CSV, PNG-lag og den selvstændige `viewer.html`. `LAYER_INFO` og legender til viewer-lagene ligger her. Funktionerne `agreement()` (mod GeoDanmark/OSM, ikke facit) og `accuracy()` (mod `runs/reference/bfe-<nr>.geojson`) beregner metrics.
 

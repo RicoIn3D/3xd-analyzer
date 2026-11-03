@@ -18,6 +18,9 @@ from . import SourceUnavailable
 
 API = "https://api.datafordeler.dk/FileDownloads/v1.0"
 CACHE_DIR = Path(__file__).resolve().parents[2] / "cache" / "dhm"
+# "Punktsky" is the current national point cloud. Areas are rescanned yearly from 2025, so it can be
+# newer than the 2023 flight. Punktsky2023 is the fallback.
+DATASETS = ("Punktsky", "Punktsky2023")
 CLASSES = {2: "terræn", 3: "lav vegetation", 4: "mellem vegetation", 5: "høj vegetation", 6: "bygning", 9: "vand"}
 
 
@@ -70,15 +73,38 @@ def _download(tile: dict, dataset: str) -> Path:
     return laz
 
 
-def punktsky(grid: Grid, dataset: str = "Punktsky2023") -> dict:
-    """Count points per class in each grid cell."""
+def punktsky(grid: Grid, datasets: tuple[str, ...] = DATASETS) -> dict:
+    """Count points per class in each grid cell, using the first dataset with tiles for the grid."""
+    errors = []
+    for dataset in datasets:
+        try:
+            tiles = _tiles(grid, dataset)
+        except SourceUnavailable as e:
+            errors.append(str(e))
+            continue
+        return _count(grid, dataset, tiles)
+    raise SourceUnavailable("; ".join(errors))
+
+
+def _year(dataset: str, dates: set[str]) -> int | None:
+    """Scan year: the newest LAS creation date, else the year in the dataset name."""
+    if dates:
+        return int(max(dates)[:4])
+    digits = dataset.removeprefix("Punktsky")
+    return int(digits) if digits.isdigit() else None
+
+
+def _count(grid: Grid, dataset: str, tiles: list[dict]) -> dict:
     counts = {c: np.zeros(grid.shape, dtype="uint32") for c in CLASSES}
     total = 0
     files = []
-    for tile in _tiles(grid, dataset):
+    dates = set()
+    for tile in tiles:
         path = _download(tile, dataset)
         files.append(tile["fileName"])
         with laspy.open(path) as f:
+            if f.header.creation_date:
+                dates.add(f.header.creation_date.isoformat())
             for pts in f.chunk_iterator(5_000_000):
                 x, y = np.asarray(pts.x), np.asarray(pts.y)
                 m = (x >= grid.xmin) & (x < grid.xmax) & (y > grid.ymin) & (y <= grid.ymax)
@@ -98,5 +124,5 @@ def punktsky(grid: Grid, dataset: str = "Punktsky2023") -> dict:
         raise SourceUnavailable("Punktsky: ingen punkter inden for området")
     area_m2 = (grid.xmax - grid.xmin) * (grid.ymax - grid.ymin)
     return {"antal": counts, "punkter": total, "tæthed_pr_m2": round(total / area_m2, 1), "filer": files,
-            "datasæt": dataset,
+            "datasæt": dataset, "optaget": sorted(dates), "år": _year(dataset, dates),
             "fordeling_pct": {CLASSES[c]: round(100 * float(v.sum()) / total, 1) for c, v in counts.items()}}
