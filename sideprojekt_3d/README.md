@@ -60,6 +60,19 @@ MCP-server valgt 2026-11-03: **MCP for Unity fra Coplay**, https://github.com/Co
 6. Genstart Claude Code, så MCP-værktøjerne indlæses.
 7. Træk `.glb`-filerne fra en run (`runs/<run>/output/model/`) ind i projektets `Assets/`. 1 Unity-enhed = 1 m. Origo og akser står i `model.json`.
 
+### Installeret software (Ricos Mac, 2026-11-03)
+
+| Program | Version | Installeret med | Bruges til |
+|---|---|---|---|
+| uv | 0.13.7 | Homebrew (`brew install uv`), `/opt/homebrew/bin/uv` | Kører MCP for Unity-serveren |
+| Unity Hub | – | Download fra unity.com, `/Applications/Unity Hub.app` | Styrer Unity-editorer og -projekter |
+| Unity Editor | 6000.6.8f1 (også 6000.6.7f1 installeret) | Unity Hub | Editor til projektet |
+| Unity-projekt "My project" | URP 17.6.0 | Unity Hub, `/Users/ricosorensen/My project` | Visning af 3D-modellen |
+| MCP for Unity (`com.coplaydev.unity-mcp`) | fra `#main` | Package Manager, git-URL | Forbinder Claude Code med editoren. **Bør fastlåses til `#v10.3.0`** (manifest.json) |
+| glTFast (`com.unity.cloud.gltfast`) | ikke installeret endnu | Package Manager | Import af `.glb` |
+
+Claude Code: MCP-serveren `UnityMCP` (HTTP, `http://127.0.0.1:8080/mcp`) er registreret i `~/.claude.json` for både `My project` og `3xd-analyzer` (lokal scope, `claude mcp add --transport http UnityMCP http://127.0.0.1:8080/mcp`). Serveren startes fra Unity (Window → MCP for Unity) og skal køre, før Claude Code kan bruge den.
+
 ## Sidegevinst: ændringer over tid
 
 Årgangene er nok mere værd til at se ændringer over tid end til 3D: ny belægning, fjernet beplantning, nye bygninger. Det kan bruges direkte i drift og som kontrol af klassificeringen.
