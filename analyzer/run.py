@@ -20,6 +20,8 @@ from rasterio.features import geometry_mask
 from shapely.geometry import shape
 from shapely.ops import transform as shapely_transform, unary_union
 
+from sideprojekt_3d import model3d
+
 from . import VERSION, classify, outputs
 from . import buildings as bldg
 from .classes import BYGNING, NAMES, UDENFOR
@@ -320,6 +322,7 @@ def main() -> None:
         bld_records = bldg.analyse(gdk["bygninger"], bbr, grid, parcel, dsm, dtm,
                                    lidar["antal"] if lidar else None, lidar["år"] if lidar else None)
         if bld_records:
+            model3d.fit_roofs(bld_records, grid, dsm)
             bld_summary = bldg.summary(bld_records)
             if bbr is not None:
                 src.items[bbr_index]["note"] = (f"{bld_summary['med_bbr']} af {bld_summary['antal']} bygninger på "
@@ -331,6 +334,16 @@ def main() -> None:
             layers.append({"navn": "Bygninger: tagmateriale (BBR)", "fil": "output/lag/tagmateriale.png",
                            "type": "overlay", "legende": bldg.roof_legend(bld_records)})
             hover["bygning"] = bld_index
+
+    # 6. 3D model: terrain and buildings as .glb for Unity and model.html
+    model_info = None
+    if dtm is not None:
+        try:
+            model_info = model3d.write(out / "model", f"Analyzer 3D – BFE {args.bfe}", grid, parcel, dtm, dsm, classes,
+                                       background, bld_records)
+        except Exception as e:  # the model is an extra; never lose the run over it
+            model_info = {"fejl": redact(f"{type(e).__name__}: {e}")}
+            traceback.print_exc()
 
     metrics = {"arealer_m2": area, "polygoner": n_polygons}
     if bld_summary:
@@ -350,7 +363,8 @@ def main() -> None:
         "omraade": area_note, "gyldigt_areal": valid_area,
         "ejendom_areal_m2": round(parcel.area, 1) if parcel is not None else None, "grid": {"crs": "EPSG:25832", "bbox": grid.bbox, "opløsning_m": res,
                                        "pixels": [grid.width, grid.height]},
-        "metode": method, "parametre": params, "bygning_parametre": bldg.DEFAULTS, "skraafoto": skraa_images, "note": args.note, "kilder": src.items,
+        "metode": method, "parametre": params, "bygning_parametre": bldg.DEFAULTS,
+        "model_parametre": model3d.DEFAULTS, "model": model_info, "skraafoto": skraa_images, "note": args.note, "kilder": src.items,
         "argumenter": vars(args),
     }
     (run_dir / "run.json").write_text(json.dumps(run_info, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -366,6 +380,8 @@ def main() -> None:
 
     _append_overview(run_name, args.bfe, method, src.items, metrics, valid_area)
     print(f"Færdig: {run_dir.relative_to(ROOT)}/viewer.html")
+    if model_info and "filer" in model_info:
+        print(f"  3D-model: {run_dir.relative_to(ROOT)}/output/model/model.html ({model_info['bygninger']} bygninger)")
     if not valid_area:
         print("  ADVARSEL: forhåndsvisning. Arealerne gælder firkanten, ikke ejendommen.")
     for k, v in area.items():

@@ -13,7 +13,7 @@ import xml.etree.ElementTree as ET
 import numpy as np
 import requests
 from rasterio.features import rasterize
-from shapely import force_2d, wkt
+from shapely import force_2d, get_coordinates, wkt
 from shapely.geometry import mapping, shape
 from shapely.ops import transform, unary_union
 from pyproj import Transformer
@@ -164,9 +164,13 @@ def geodanmark(grid: Grid) -> dict:
         for f in items:
             if not f.get("geometry"):
                 continue
-            geom = force_2d(shape(f["geometry"]))
+            geom3d = shape(f["geometry"])
+            geom = force_2d(geom3d)
             if entity == "Bygning":
-                buildings.append({"geom": geom, "properties": f.get("properties") or {}})
+                # Vertex heights (DVR90). With metode3D "Tag" the outline is registered at the roof edge.
+                z = get_coordinates(geom3d, include_z=True)[:, 2] if geom3d.has_z else None
+                buildings.append({"geom": geom, "properties": f.get("properties") or {},
+                                  "z": float(np.nanmedian(z)) if z is not None and z.size else None})
             features.append({"type": "Feature", "geometry": mapping(transform(_to_wgs84, geom)),
                              "properties": {"objekttype": entity, **{k: v for k, v in (f.get("properties") or {}).items()
                                                                      if isinstance(v, (str, int, float, bool))}}})

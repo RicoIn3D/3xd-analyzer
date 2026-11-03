@@ -293,6 +293,9 @@ VIEWER_TEMPLATE = """<!doctype html>
   <h1>__TITLE__</h1>
   <div class="muted" id="meta"></div>
   <div id="warn" class="warn" hidden></div>
+  <div id="model-link" hidden><h2>3D-model</h2>
+    <a href="output/model/model.html" target="_blank" rel="noopener">Åbn 3D-modellen i en ny fane ↗</a>
+    <div class="muted">Terræn og bygninger. Filerne (.glb) ligger i output/model/ og kan åbnes i Unity.</div></div>
   <h2>Baggrund</h2><div id="bases"></div>
   <h2>Lag</h2><div id="overlays"></div>
   <div id="legends"></div>
@@ -410,6 +413,7 @@ if (D.run.gyldigt_areal === false) {
 }
 if (D.run.ejendom_areal_m2) D.areas = { 'Ejendom (polygon)': D.run.ejendom_areal_m2, ...D.areas };
 document.getElementById('meta').textContent = `${D.run.run} · metode ${D.run.metode} · ${D.res} m/px`;
+if (D.run.model && D.run.model.filer) document.getElementById('model-link').hidden = false;
 if (D.run.skraafoto && D.run.skraafoto.length) {
   document.getElementById('skraa-sec').hidden = false;
   const g = document.getElementById('skraa');

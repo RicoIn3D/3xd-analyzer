@@ -180,6 +180,11 @@ def analyse(footprints: list[dict], bbr: dict | None, grid: Grid, parcel, dsm: n
             "laengderetning": _direction_name(axis),
             "tagform": None, "taghaeldning_grader": None, "flad_andel": None, "tagareal_m2": None,
             "hoejde_median_m": None, "hoejde_max_m": None, "tag_daekning": None,
+            "geodanmark_tagkant_m": None, "geodanmark_hoejde_metode": props.get("vertikalStedfaestelsesmetode"),
+            "geodanmark_hoejde_noejagtighed_m": props.get("vertikalNoejagtighed"),
+            "model_tagform": None, "model_tagfod_m": None, "model_tagryg_m": None, "model_afvigelse_m": None,
+            "_ground_z": None, "_base_z": None, "_roof_cells": None, "_fit_cells": None,
+            "_wall_code": wall_code,
         }
         if slope is not None:
             full = rasterize([(geom, 1)], out_shape=grid.shape, transform=grid.transform, fill=0,
@@ -189,11 +194,14 @@ def analyse(footprints: list[dict], bbr: dict | None, grid: Grid, parcel, dsm: n
                               dtype="uint8").astype(bool) if not inner_geom.is_empty else full
             if inner.sum() < 8:
                 inner = full
+            rec["_roof_cells"] = full
             if roof_points is not None:
                 # Only cells where the point cloud sees the roof itself. Trees over the roof are left out.
                 seen = inner & roof_points
                 rec["tag_daekning"] = round(float(seen.sum()) / max(int(inner.sum()), 1), 2)
                 inner = seen
+                rec["_roof_cells"] = full & roof_points
+            rec["_fit_cells"] = inner
             rec.update(_roof_shape(slope, aspect, inner, axis, p))
             if rec["tag_daekning"] is not None and rec["tag_daekning"] < p["punktsky_min_daekning"]:
                 why = (f"bygget efter punktskyen ({lidar_year})" if year and lidar_year and year > lidar_year
@@ -212,6 +220,10 @@ def analyse(footprints: list[dict], bbr: dict | None, grid: Grid, parcel, dsm: n
                 ring = rasterize([(ring_geom, 1)], out_shape=grid.shape, transform=grid.transform, fill=0,
                                  dtype="uint8").astype(bool) if not ring_geom.is_empty else full
                 ground = np.nanmedian(dtm[ring]) if ring.any() else np.nanmedian(dtm[full])
+                rec["_ground_z"] = None if np.isnan(ground) else float(ground)
+                if fp.get("z") is not None and props.get("metode3D") == "Tag" and rec["_ground_z"] is not None:
+                    rec["geodanmark_tagkant_m"] = round(fp["z"] - rec["_ground_z"], 1)
+                rec["_base_z"] = float(np.nanmin(dtm[ring | full]))
                 roof = dsm[inner]
                 roof = roof[~np.isnan(roof)]
                 if roof.size and not np.isnan(ground):
@@ -244,7 +256,9 @@ def summary(records: list[dict]) -> dict:
 FIELDS = ("nr", "anvendelse", "opfoerelsesaar", "ombygningsaar", "etager", "tagmateriale", "ydervaeg",
           "mulig_asbest", "tagform", "taghaeldning_grader", "laengderetning", "grundplan_m2",
           "bebygget_areal_bbr_m2", "tagareal_m2", "hoejde_median_m", "hoejde_max_m", "flad_andel",
-          "tag_daekning", "tagmateriale_kode", "bbr_fundet", "bbr_id", "geodanmark_id")
+          "tag_daekning", "geodanmark_tagkant_m", "geodanmark_hoejde_metode", "geodanmark_hoejde_noejagtighed_m",
+          "model_tagform", "model_tagfod_m", "model_tagryg_m", "model_afvigelse_m",
+          "tagmateriale_kode", "bbr_fundet", "bbr_id", "geodanmark_id")
 
 
 def public(r: dict) -> dict:

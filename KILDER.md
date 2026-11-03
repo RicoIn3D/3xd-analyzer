@@ -28,7 +28,7 @@ Overblik (status pr. 2026-10-07, efter første run med rigtige data):
 | Datafordeler DAR | Adresse → BFE | Ikke nødvendig når BFE kendes |
 | Datafordeler BBR (`BBR_Bygning`) | Tagmateriale, ydervæg, anvendelse, opførelsesår pr. bygning | I brug fra v0.4, virker. Kobles via `BBRUUID` på GeoDanmark-bygningen |
 | Befæstelsesdata (Klimadatastyrelsen) | Belægning: AI-beregnet befæstelsesgrad | Kandidat, høj prioritet. Prototype, adgang afklares med KDS (se "Nye kandidater") |
-| 3D Ortofoto (3DO, Klimadatastyrelsen Labs) | 3D-model ud fra skråfotos (sideprojekt, se `SIDEPROJEKT-3D.md`) | Kandidat. Demo viser Aarhus, ikke Hjørring. Vi bygger egen model først |
+| 3D Ortofoto (3DO, Klimadatastyrelsen Labs) | 3D-model ud fra skråfotos (sideprojekt, se `sideprojekt_3d/README.md`) | Kandidat. Demo viser Aarhus, ikke Hjørring. Vi bygger egen model først |
 | Hexagon DDO, sommerortofoto | Træer/buske med løv, NDVI om sommeren | Kandidat, privat. Kun på tilbud |
 | CLMS HRL Imperviousness 2024 | Baseline for belægning (10 m) | Kandidat, lav prioritet |
 | Vexcel, Ecopia, Pléiades Neo, Vantor | Luftfoto, satellit, færdig klassifikation | Vurderet 2026-11-03, ikke anbefalet nu |
@@ -77,6 +77,12 @@ Relevante objekttyper og hvordan pipelinen bruger dem:
 | `Hegn` | Linje | Kun visning (kan være hæk eller fast hegn) | 74 |
 | `Sportsbane`, `RekreativtOmraade`, `Bassin`, `Soe` | Flade | Kun visning | 0 |
 
+**Bygningshøjder (3D) i GeoDanmark (undersøgt 2026-11-03):** bygningsomridset leveres med z-koordinat (DVR90) pr. punkt. Feltet `metode3D` siger, hvor højden er målt: `Tag` betyder tagkanten (tagfoden). `vertikalStedfaestelsesmetode` og `vertikalNoejagtighed` siger, hvor godt.
+
+- På testcasen er 7 af 8 bygninger `Manuel` med `vertikalNoejagtighed` 10,00 m, dvs. ikke målt. Alligevel ligger de inden for ca. 0,1–0,6 m af den tagfod, vi selv tilpasser fra DHM.
+- Bygning 8 (overdækning fra 2025, efter punktskyen) er `Fotogrammetri` med 0,15 m. Den har ingen DHM-højde, så 3D-modellen bruger GeoDanmarks tagkant her (krav: nøjagtighed ≤ 0,5 m og ikke `Manuel`).
+- Pipelinen skriver `geodanmark_tagkant_m` (over terræn), `geodanmark_hoejde_metode` og `geodanmark_hoejde_noejagtighed_m` i `bygninger.csv`.
+
 Fuld liste: https://grunddatamodel.datafordeler.dk/objekttypekatalog/GeoDanmark/package-summary.html
 
 ## Ortofoto (Dataforsyningen)
@@ -85,8 +91,8 @@ Fuld liste: https://grunddatamodel.datafordeler.dk/objekttypekatalog/GeoDanmark/
 - Lag pr. år: `geodanmark_<år>_12_5cm` (RGB) og `geodanmark_<år>_12_5cm_cir` (nær-infrarød, rød, grøn). Årgange 2015–2025.
 - Fra 2024 findes også `geodanmark_<år>_10cm` og `geodanmark_<år>_10cm_cir`. Optagelsen er 15 cm, og 10 cm bestilles kun af nogle kommuner. Pipelinen prøver 10 cm først og falder tilbage til 12,5 cm, hvis laget fejler eller mere end 0,5 % af området er tomt. `run.json` viser det brugte lag. Ved det nuværende grid på 0,25 m er gevinsten lille.
 - **Faldgrube:** hvor 10 cm-laget ikke dækker, svarer WMS'en med et helt **hvidt** billede (HTTP 200, ikke en fejl). Ældre lag udfylder med sort. Pipelinen tæller derfor både rent hvide og rent sorte pixels som tomme.
-- Testcasen (Hjørring) er ikke dækket af 10 cm i 2023–2025 (testet 2026-11-03). Her bruges 12,5 cm.
-- 2026: fotoflyvningen sluttede tidligt (Quick-orto klar 11. juni 2026). Det endelige produkt udstilles ifølge Dataforsyningen i november. Pr. 2026-11-03 er laget endnu ikke i WMS'en. `--orto-years` starter med 2026, så det kommer med automatisk; indtil da springes årgangen over.
+- 2026: fotoflyvningen sluttede tidligt (Quick-orto klar 11. juni 2026). Lagene `geodanmark_2026_*` kom i WMS'en eftermiddagen 2026-11-03 og bruges automatisk (`--orto-years` starter med 2026).
+- Testcasen (Hjørring) har 10 cm i 2026 (`geodanmark_2026_10cm` og `_cir`), men ikke i 2023–2025.
 - Bulkudtræk i 12,5 og 10 cm fra Datafordeleren blev udfaset 29. april 2026. Vi bruger WMS og er ikke berørt.
 - CIR-laget giver vegetationsindeks (NDVI) i 12,5 cm. Det er vores vigtigste kilde til græs/belægning.
 - **Vigtigt:** det er forårsfotos. Løvtræer er uden blade og har derfor lavt vegetationsindeks. Højdemodellen skal afgøre, om noget er et træ.

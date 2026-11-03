@@ -39,11 +39,26 @@ Idé: lav en 3D-model (Gaussian splatting eller farvelagt punktsky) af ejendomme
 
 ## Første skridt: bygningsmodel som baseline
 
+**Status 2026-11-03: bygget i v0.5.0** (`sideprojekt_3d/model3d.py`, output i run'ens `output/model/`). Testcasen: 8 bygninger. Tøndetagene afviger 0,22–0,39 m i snit fra DHM efter tilpasning med mindste kvadrater. To bygninger er usikre og får fladt tag: én dækket af træer, og en overdækning fra 2025 (bygget efter punktskyen), hvor højden kommer fra GeoDanmarks fotogrammetrisk målte tagkant (±0,15 m). GeoDanmarks tagkant bruges kun, når den er målt (ikke `Manuel`); ellers BBR-etager. Næste skridt: åbn `bygninger.glb` i Unity (glTFast) og sammenlign med CityWeft's gratis forhåndsvisning.
+
 Før billederne laves en 3D-model af bygningerne på matriklen ud fra data, vi allerede har i v0.4:
 
 - Grundplan fra GeoDanmark, højder fra DHM overflade minus terræn, tagform, hældning og retning fra bygningsanalysen, etager, tagmateriale og ydervæg fra BBR. Terræn fra DHM, skåret til matriklen.
 - To varianter: en **simpel model** (tagform med målte højder, LOD2) som baseline, og en **målt model** (tagflade direkte fra DHM overflade, kun celler med bygningspunkter i punktskyen). Forskellen mellem dem gemmes pr. bygning som kontrol.
 - Bygges i Python i pipelinen og eksporteres som `.glb` (meter, nulpunkt midt på ejendommen). Vises i Unity (glTFast, MCP for Unity fra Coplay) og i `viewer.html` med three.js.
+
+## Unity-opsætning
+
+MCP-server valgt 2026-11-03: **MCP for Unity fra Coplay**, https://github.com/CoplayDev/unity-mcp, version `v10.3.0` (MIT). Giver Claude Code adgang til Unity-editoren (scener, objekter, assets, konsol).
+
+1. Installer `uv` (kræves af serveren): `brew install uv`
+2. Unity Hub: opret et nyt 3D-projekt (URP).
+3. Window → Package Manager → + → "Add package from git URL":
+   `https://github.com/CoplayDev/unity-mcp.git?path=/MCPForUnity#v10.3.0`
+4. Samme sted, "Add package by name": `com.unity.cloud.gltfast` (import af `.glb`).
+5. Window → MCP for Unity → "Configure All Detected Clients" (finder Claude Code).
+6. Genstart Claude Code, så MCP-værktøjerne indlæses.
+7. Træk `.glb`-filerne fra en run (`runs/<run>/output/model/`) ind i projektets `Assets/`. 1 Unity-enhed = 1 m. Origo og akser står i `model.json`.
 
 ## Sidegevinst: ændringer over tid
 
