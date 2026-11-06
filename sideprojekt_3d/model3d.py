@@ -55,6 +55,9 @@ DEFAULTS = {
                                    # (cosine between the triangle normal and the direction to the camera)
     "skraafoto_max_side_px": 3000,  # texture size limit per oblique
     "skraafoto_margin_px": 60,  # cells further than this from the fit (chimneys, trees) are dropped and refitted
+    "vaeg_fod_radius_m": 1.0,     # a wall's foot follows the lowest terrain within this distance of the wall point
+    "vaeg_fod_under_m": 0.1,      # and goes this far below it, so no gap shows between wall and terrain mesh
+    "vaeg_segment_m": 1.0,        # walls are split into pieces at most this long, so the foot can follow the terrain
     "trae_min_hoejde_m": 3.0,     # a crown top in the surface model counts as a tree from this height
     "trae_top_radius_m": 2.5,     # crown tops closer than this are one tree; also how far a GeoDanmark point looks
     "trae_max_krone_radius_m": 8.0,
@@ -282,12 +285,49 @@ def _densify(ring: np.ndarray, extra: np.ndarray) -> np.ndarray:
     return np.array(out)
 
 
-def _building_mesh(r: dict, mesh: Mesh, p: dict) -> None:
+def _subdivide(ring: np.ndarray, max_len: float) -> np.ndarray:
+    """Split ring segments longer than max_len into equal pieces."""
+    out = []
+    for p0, p1 in zip(ring[:-1], ring[1:]):
+        n = max(1, math.ceil(float(np.linalg.norm(p1 - p0)) / max_len))
+        out.extend(p0 + (p1 - p0) * (k / n) for k in range(n))
+    out.append(ring[-1])
+    return np.array(out)
+
+
+def _wall_foot(dtm: np.ndarray, grid: Grid, p: dict):
+    """Height of a wall's foot at (x, y): just below the lowest terrain near the point, NaN outside the grid.
+
+    The terrain mesh is drawn under buildings too (the DHM is interpolated there), so the foot follows the
+    terrain along the wall instead of going down to the building's lowest point. On a slope that lowest point
+    is metres under the ground on the uphill side, where the wall then showed below the terrain.
+    """
+    k = 2 * max(1, round(p["vaeg_fod_radius_m"] / grid.res)) + 1
+    low = ndimage.minimum_filter(np.where(np.isnan(dtm), np.inf, dtm), size=k, mode="nearest")
+    low = np.where(np.isinf(low), np.nan, low) - p["vaeg_fod_under_m"]
+
+    def foot(x: np.ndarray, y: np.ndarray) -> np.ndarray:
+        col = np.floor((x - grid.xmin) / grid.res).astype(int)
+        row = np.floor((grid.ymax - y) / grid.res).astype(int)
+        ok = (row >= 0) & (row < low.shape[0]) & (col >= 0) & (col < low.shape[1])
+        z = np.full(len(x), np.nan)
+        z[ok] = low[row[ok], col[ok]]
+        return z
+
+    return foot
+
+
+def _building_mesh(r: dict, mesh: Mesh, p: dict, foot=None) -> None:
+    """Simple building: roof from the fitted shape, walls from the outline down to the terrain.
+
+    foot (from _wall_foot) gives the wall's foot along the outline; without it, or where it has no value,
+    walls go down to the building's lowest terrain point.
+    """
     roof = r["_roof"]
     footprints = [orient(g, 1.0) for g in _polygons(r["_geom"])]
     roof_color = (TAG_COLORS.get(str(r["tagmateriale_kode"]), NO_BBR_COLOR) if r["bbr_fundet"] else NO_BBR_COLOR)
     wall_color = WALL_COLORS.get(str(r["_wall_code"]), DEFAULT_WALL_COLOR)
-    base = r["_base_z"] if r["_base_z"] is not None else roof["ground"]
+    lowest = r["_base_z"] if r["_base_z"] is not None else roof["ground"]
     pieces = [pc for geom in footprints for region in _regions(roof, p["tondetag_strimler"])
               for pc in _polygons(geom.intersection(region))]
     corners = []
@@ -300,11 +340,15 @@ def _building_mesh(r: dict, mesh: Mesh, p: dict) -> None:
     extra = np.vstack(corners) if corners else np.empty((0, 2))
     for ring in (ring for geom in footprints for ring in (geom.exterior, *geom.interiors)):
         pts = _densify(np.asarray(ring.coords), extra)
+        if foot is not None:
+            pts = _subdivide(pts, p["vaeg_segment_m"])
         top = _roof_z(roof, pts[:, 0], pts[:, 1])
+        base = np.full(len(pts), lowest) if foot is None else foot(pts[:, 0], pts[:, 1])
+        base = np.minimum(np.where(np.isnan(base), lowest, base), top)
         for i in range(len(pts) - 1):
             (x0, y0), (x1, y1) = pts[i], pts[i + 1]
             outward = np.array([y1 - y0, x0 - x1, 0.0])  # exterior is counter-clockwise, holes clockwise
-            q = [(x0, y0, base), (x1, y1, base), (x1, y1, top[i + 1]), (x0, y0, top[i])]
+            q = [(x0, y0, base[i]), (x1, y1, base[i + 1]), (x1, y1, top[i + 1]), (x0, y0, top[i])]
             mesh.tri(q[0], q[1], q[2], wall_color, facing=outward)
             mesh.tri(q[0], q[2], q[3], wall_color, facing=outward)
 
@@ -720,12 +764,13 @@ def write(out_dir: Path, title: str, grid: Grid, parcel, dtm: np.ndarray, dsm: n
                 mesh.add(*hf)
             save(name, [{"name": name.removesuffix(".glb"), "mesh": mesh}], description)
 
+    foot = _wall_foot(dtm, grid, p)
     simple, measured = [], []
     for r in records:
         if r.get("_roof") is None:
             continue
         mesh = Mesh()
-        _building_mesh(r, mesh, p)
+        _building_mesh(r, mesh, p, foot)
         simple.append({"name": f"bygning {r['nr']}", "mesh": mesh, "extras": public(r)})
         cells = r["_roof_cells"]
         if dsm is not None and cells is not None and cells.any():
@@ -755,7 +800,7 @@ def write(out_dir: Path, title: str, grid: Grid, parcel, dtm: np.ndarray, dsm: n
                 if r.get("_roof") is None:
                     continue
                 mesh = Mesh()
-                _building_mesh(r, mesh, p)
+                _building_mesh(r, mesh, p, foot)
                 rest, chunks = _texture_split(mesh, crops, p)
                 used |= {c[4] for c in chunks}
                 textured.append({"name": f"bygning {r['nr']}", "mesh": rest, "textured": chunks, "extras": public(r)})
