@@ -183,8 +183,8 @@ def analyse(footprints: list[dict], bbr: dict | None, grid: Grid, parcel, dsm: n
             "geodanmark_tagkant_m": None, "geodanmark_hoejde_metode": props.get("vertikalStedfaestelsesmetode"),
             "geodanmark_hoejde_noejagtighed_m": props.get("vertikalNoejagtighed"),
             "model_tagform": None, "model_tagfod_m": None, "model_tagryg_m": None, "model_afvigelse_m": None,
-            "_ground_z": None, "_base_z": None, "_roof_cells": None, "_fit_cells": None,
-            "_wall_code": wall_code,
+            "_ground_z": None, "_base_z": None, "_top_ground_z": None, "_roof_cells": None, "_fit_cells": None,
+            "_wall_code": wall_code, "_use_code": str(b.get("byg021BygningensAnvendelse") or "") if b else "",
         }
         if slope is not None:
             full = rasterize([(geom, 1)], out_shape=grid.shape, transform=grid.transform, fill=0,
@@ -224,6 +224,7 @@ def analyse(footprints: list[dict], bbr: dict | None, grid: Grid, parcel, dsm: n
                 if fp.get("z") is not None and props.get("metode3D") == "Tag" and rec["_ground_z"] is not None:
                     rec["geodanmark_tagkant_m"] = round(fp["z"] - rec["_ground_z"], 1)
                 rec["_base_z"] = float(np.nanmin(dtm[ring | full]))
+                rec["_top_ground_z"] = float(np.nanmax(dtm[full]))
                 roof = dsm[inner]
                 roof = roof[~np.isnan(roof)]
                 if roof.size and not np.isnan(ground):

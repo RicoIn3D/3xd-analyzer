@@ -29,10 +29,11 @@ import requests
 import shapely
 from PIL import Image
 from rasterio.enums import Resampling
+from rasterio.features import rasterize
 from scipy import ndimage
 from rasterio.windows import Window
 from shapely import affinity
-from shapely.geometry import Polygon, box
+from shapely.geometry import LineString, MultiLineString, Polygon, box
 from shapely.geometry.polygon import orient
 
 from analyzer import VERSION
@@ -50,6 +51,17 @@ DEFAULTS = {
     "afvigelse_skala_m": 1.0,     # deviation shown as full red (roof higher) or blue (lower) in the measured roof
     "tilpasning_min_celler": 20,  # roof heights are fitted to the surface model when this many roof cells are seen
     "geodanmark_max_noejagtighed_m": 0.5,  # GeoDanmark roof-edge height is used when measured at least this precisely
+    "geodanmark_min_tagkant_m": 2.0,  # and when it is at least this high (lower is a measuring error, not a roof)
+    "standard_tagkant_m": 2.4,    # roof edge above the highest ground under an unmeasured building with no BBR storeys
+    "aaben_tagtykkelse_m": 0.2,   # open buildings (carport, overdækning): roof slab thickness
+    "aaben_stolpe_m": 0.15,       # post width
+    "aaben_stolpe_afstand_m": 3.0,  # largest distance between posts along the outline
+    "gennemgang_min_vaeg_m": 3.0,  # buildings sharing a wall at least this long are checked for a covered passage
+    "gennemgang_baand_m": 6.0,    # how far from the shared wall the passage is looked for
+    "gennemgang_over_tag_m": 0.8,  # passage roof: surface model at least this far above the building's fitted roof
+    "gennemgang_min_andel": 0.5,  # share of the band's roof cells that must be passage roof
+    "gennemgang_min_bredde_m": 1.5,  # narrower bands are a ridge or a chimney, not a passage
+    "terraen_tekstur_m": 0.1,     # terrain texture resolution: the orthophoto is fetched separately at this size
     "tilpasning_afviger_m": 0.5,
     "skraafoto_min_vinkel": 0.25,  # an oblique textures a triangle only when it faces the camera at least this much
                                    # (cosine between the triangle normal and the direction to the camera)
@@ -75,6 +87,13 @@ WALL_COLORS = {
 DEFAULT_WALL_COLOR = (215, 205, 190)
 
 UP = np.array([0.0, 0.0, 1.0])
+
+# BBR byg021 uses that are a roof on posts with open sides
+OPEN_USES = {"920", "950"}  # carport, fritliggende overdækning
+
+
+def _is_open(r: dict) -> bool:
+    return bool(r.get("_open")) or r.get("_use_code") in OPEN_USES
 
 
 class Mesh:
@@ -155,15 +174,23 @@ def fit_roofs(records: list[dict], grid: Grid, dsm: np.ndarray | None, p: dict =
         if h_med is None:
             # No surface-model height (built after the scan, or hidden): GeoDanmark's measured roof edge, else BBR
             accuracy = r["geodanmark_hoejde_noejagtighed_m"]
-            if (r["geodanmark_tagkant_m"] is not None and accuracy is not None
+            edge = r["geodanmark_tagkant_m"]
+            if (edge is not None and edge >= p["geodanmark_min_tagkant_m"] and accuracy is not None
                     and float(accuracy) <= p["geodanmark_max_noejagtighed_m"]
                     and r["geodanmark_hoejde_metode"] != "Manuel"):
-                h_med = h_max = r["geodanmark_tagkant_m"]
+                h_med = h_max = edge
                 kind, label = "flat", "fladt i tagkant (højde fra GeoDanmark)"
             else:
-                floors = int(r["etager"]) if str(r["etager"] or "").isdigit() else 1
-                h_med = h_max = max(floors, 1) * p["etagehoejde_m"]
-                kind, label = "flat", "fladt (højde fra BBR-etager)"
+                # Measured from the highest ground under the building: on a slope the median ground around it
+                # left the roof low on the uphill side and several metres up on the downhill side
+                if r.get("_top_ground_z") is not None:
+                    ground = r["_top_ground_z"]
+                if str(r["etager"] or "").isdigit() and int(r["etager"]) > 0:
+                    h_med = h_max = int(r["etager"]) * p["etagehoejde_m"]
+                    kind, label = "flat", "fladt (højde fra BBR-etager)"
+                else:
+                    h_med = h_max = p["standard_tagkant_m"]
+                    kind, label = "flat", "fladt (standardhøjde)"
         pitch = r["taghaeldning_grader"]
         if kind != "flat" and pitch is None:
             kind, label = "flat", "fladt (forenklet)"
@@ -324,33 +351,156 @@ def _building_mesh(r: dict, mesh: Mesh, p: dict, foot=None) -> None:
     walls go down to the building's lowest terrain point.
     """
     roof = r["_roof"]
-    footprints = [orient(g, 1.0) for g in _polygons(r["_geom"])]
-    roof_color = (TAG_COLORS.get(str(r["tagmateriale_kode"]), NO_BBR_COLOR) if r["bbr_fundet"] else NO_BBR_COLOR)
+    footprints = [orient(g, 1.0) for g in _polygons(r.get("_geom_3d", r["_geom"]))]
+    roof_color = r.get("_roof_color") or (TAG_COLORS.get(str(r["tagmateriale_kode"]), NO_BBR_COLOR)
+                                          if r["bbr_fundet"] else NO_BBR_COLOR)
     wall_color = WALL_COLORS.get(str(r["_wall_code"]), DEFAULT_WALL_COLOR)
     lowest = r["_base_z"] if r["_base_z"] is not None else roof["ground"]
     pieces = [pc for geom in footprints for region in _regions(roof, p["tondetag_strimler"])
               for pc in _polygons(geom.intersection(region))]
+    is_open = _is_open(r)
+    slab = p["aaben_tagtykkelse_m"] if is_open else 0.0
     corners = []
     for piece in pieces:
         for tri in shapely.get_parts(shapely.constrained_delaunay_triangles(piece)):
             xy = np.asarray(tri.exterior.coords)[:3]
             z = _roof_z(roof, xy[:, 0], xy[:, 1])
             mesh.tri(*np.column_stack([xy, z]), roof_color, facing=UP)
+            if is_open:  # underside, seen from under the open roof
+                mesh.tri(*np.column_stack([xy, z - slab]), roof_color, facing=-UP)
         corners += [np.asarray(ring.coords) for ring in (piece.exterior, *piece.interiors)]
     extra = np.vstack(corners) if corners else np.empty((0, 2))
     for ring in (ring for geom in footprints for ring in (geom.exterior, *geom.interiors)):
         pts = _densify(np.asarray(ring.coords), extra)
-        if foot is not None:
+        if foot is not None and not is_open:
             pts = _subdivide(pts, p["vaeg_segment_m"])
         top = _roof_z(roof, pts[:, 0], pts[:, 1])
+        if is_open:  # only the roof slab's edge; the sides are open
+            _wall_band(mesh, pts, top - slab, top, roof_color)
+            continue
         base = np.full(len(pts), lowest) if foot is None else foot(pts[:, 0], pts[:, 1])
         base = np.minimum(np.where(np.isnan(base), lowest, base), top)
-        for i in range(len(pts) - 1):
-            (x0, y0), (x1, y1) = pts[i], pts[i + 1]
-            outward = np.array([y1 - y0, x0 - x1, 0.0])  # exterior is counter-clockwise, holes clockwise
-            q = [(x0, y0, base[i]), (x1, y1, base[i + 1]), (x1, y1, top[i + 1]), (x0, y0, top[i])]
-            mesh.tri(q[0], q[1], q[2], wall_color, facing=outward)
-            mesh.tri(q[0], q[2], q[3], wall_color, facing=outward)
+        _wall_band(mesh, pts, base, top, wall_color)
+    if is_open:
+        for geom in footprints:
+            for x, y in _post_positions(geom, p):
+                z0 = foot(np.array([x]), np.array([y]))[0] if foot is not None else np.nan
+                z0 = lowest if np.isnan(z0) else z0
+                z1 = float(_roof_z(roof, np.array([x]), np.array([y]))[0]) - slab
+                _post(mesh, x, y, min(z0, z1), z1, p["aaben_stolpe_m"], wall_color)
+
+
+def _wall_band(mesh: Mesh, pts: np.ndarray, base: np.ndarray, top: np.ndarray, color) -> None:
+    """Vertical faces along a ring from base to top (both per point)."""
+    for i in range(len(pts) - 1):
+        (x0, y0), (x1, y1) = pts[i], pts[i + 1]
+        outward = np.array([y1 - y0, x0 - x1, 0.0])  # exterior is counter-clockwise, holes clockwise
+        q = [(x0, y0, base[i]), (x1, y1, base[i + 1]), (x1, y1, top[i + 1]), (x0, y0, top[i])]
+        mesh.tri(q[0], q[1], q[2], color, facing=outward)
+        mesh.tri(q[0], q[2], q[3], color, facing=outward)
+
+
+def _post_positions(geom: Polygon, p: dict) -> list[tuple[float, float]]:
+    """Posts at the corners of an open building and along its sides, set in from the outline by a post width."""
+    inner = geom.buffer(-p["aaben_stolpe_m"], join_style="mitre")
+    ring = inner.exterior if isinstance(inner, Polygon) and not inner.is_empty else geom.exterior
+    pts = _subdivide(np.asarray(shapely.simplify(ring, 0.05).coords), p["aaben_stolpe_afstand_m"])
+    return [tuple(pt) for pt in pts[:-1]]
+
+
+def _post(mesh: Mesh, x: float, y: float, z0: float, z1: float, width: float, color) -> None:
+    h = width / 2
+    square = np.array([(x - h, y - h), (x + h, y - h), (x + h, y + h), (x - h, y + h), (x - h, y - h)])
+    _wall_band(mesh, square, np.full(5, z0), np.full(5, z1), color)
+
+
+# Covered passages ---------------------------------------------------------------------------------------------
+
+PASSAGE_COLOR = (225, 228, 230)
+
+
+def find_passages(records: list[dict], grid: Grid, dsm: np.ndarray, p: dict = DEFAULTS) -> list[dict]:
+    """Covered passages between buildings that share a wall, found in the surface model. Returns model records.
+
+    GeoDanmark draws such a passage (a roofed opening through a row of houses) as part of the buildings on each
+    side. Its roof stands clear of the buildings' fitted roof, so it shows as a band along the shared wall where
+    the surface model is well above that roof. The band is cut out of both buildings (in the 3D model only:
+    r["_geom_3d"]) and returned as an open building with a barrel roof fitted to the surface model.
+    """
+    found = []
+    usable = [r for r in records if r.get("_roof") is not None and r.get("_roof_cells") is not None]
+    for i, ri in enumerate(usable):
+        for rj in usable[i + 1:]:
+            gi, gj = ri.get("_geom_3d", ri["_geom"]), rj.get("_geom_3d", rj["_geom"])
+            if gi.distance(gj) > 0.05:
+                continue
+            shared = [g for g in shapely.get_parts(gi.boundary.buffer(0.05).intersection(gj.boundary))
+                      if isinstance(g, LineString)]
+            line = shapely.line_merge(MultiLineString(shared)) if shared else None
+            if line is None or line.is_empty or line.length < p["gennemgang_min_vaeg_m"]:
+                continue
+            sides = []
+            for r, g in ((ri, gi), (rj, gj)):
+                band = g.intersection(line.buffer(p["gennemgang_baand_m"], cap_style="flat"))
+                rows, cols, x, y = _cell_centres(r["_roof_cells"], grid)
+                inside = shapely.contains_xy(band, x, y)
+                if inside.sum() < p["tilpasning_min_celler"]:
+                    sides.append(None)
+                    continue
+                rows, cols, x, y = rows[inside], cols[inside], x[inside], y[inside]
+                above = dsm[rows, cols] - _roof_z(r["_roof"], x, y) > p["gennemgang_over_tag_m"]
+                dist = shapely.distance(line, shapely.points(x, y))
+                if not above.any():
+                    sides.append(None)
+                    continue
+                reach = float(np.percentile(dist[above], 95))
+                share = above[dist <= reach].mean()
+                sides.append((g, reach) if share >= p["gennemgang_min_andel"] else None)
+            if any(sd is None for sd in sides):
+                continue
+            parts = [g.intersection(line.buffer(reach, cap_style="flat")) for g, reach in sides]
+            geom = shapely.union_all(parts).buffer(0.05).buffer(-0.05)
+            if geom.is_empty or min(reach for _, reach in sides) < p["gennemgang_min_bredde_m"] / 2:
+                continue
+            ri["_geom_3d"], rj["_geom_3d"] = gi.difference(geom), gj.difference(geom)
+            found.append(_passage_record(len(found) + 1, geom, ri, grid, dsm, p))
+    return found
+
+
+def _passage_record(n: int, geom, parent: dict, grid: Grid, dsm: np.ndarray, p: dict) -> dict:
+    """Open building with a barrel roof running the same way as the parent building's roof."""
+    pr = parent["_roof"]
+    a, b = np.asarray(pr["a"]), np.asarray(pr["b"])
+    pts = np.asarray(geom.minimum_rotated_rectangle.exterior.coords)[:4]
+    c = pts.mean(axis=0)
+    rel = pts - c
+    roof = {"kind": "barrel", "c": c, "a": a, "b": b, "L": float(np.abs(rel @ a).max()),
+            "W": float(np.abs(rel @ b).max()), "ground": pr["ground"], "side": 1.0,
+            "eaves": pr["eaves"], "ridge": pr["ridge"]}
+    cells = rasterize([(geom, 1)], out_shape=grid.shape, transform=grid.transform, fill=0,
+                      dtype="uint8").astype(bool)
+    _fit_heights(roof, cells, grid, dsm, p)
+    extras = {"nr": f"G{n}", "anvendelse": "Overdækket gennemgang (fundet i højdemodellen)",
+              "model_tagform": "buet, åben", "model_tagfod_m": round(roof["eaves"], 1),
+              "model_tagryg_m": round(roof["ridge"], 1), "grundplan_m2": round(geom.area, 1)}
+    return {"nr": f"G{n}", "_geom": geom, "_roof": roof, "_open": True, "_roof_color": PASSAGE_COLOR,
+            "_wall_code": None, "_base_z": parent["_base_z"], "opfoerelsesaar": None, "_extras": extras}
+
+
+def _terrain_texture(image: np.ndarray, grid: Grid, inside: np.ndarray, pos: np.ndarray):
+    """Crop of a grid-aligned image (any resolution) over the terrain, and the terrain vertices' UVs in it."""
+    rows, cols = np.nonzero(inside)
+    k = image.shape[1] / grid.width
+    r0, r1, c0, c1 = rows.min(), rows.max() + 1, cols.min(), cols.max() + 1
+    crop = image[int(r0 * k):int(np.ceil(r1 * k)), int(c0 * k):int(np.ceil(c1 * k))]
+    x0, y1 = grid.xmin + c0 * grid.res, grid.ymax - r0 * grid.res
+    w, h = (c1 - c0) * grid.res, (r1 - r0) * grid.res
+    uv = np.column_stack([(pos[:, 0] - x0) / w, (y1 - pos[:, 1]) / h])
+    if max(crop.shape[:2]) > 8192:  # largest texture most GPUs take
+        f = 8192 / max(crop.shape[:2])
+        crop = np.asarray(Image.fromarray(crop).resize((round(crop.shape[1] * f), round(crop.shape[0] * f)),
+                                                       Image.LANCZOS))
+    return np.ascontiguousarray(crop), uv.astype("float64")
 
 
 # Height fields (terrain, measured roofs) -----------------------------------------------------------------------
@@ -581,17 +731,21 @@ def _uv(ob: dict, pts) -> np.ndarray | None:
     return np.array(uv)
 
 
-def _texture_split(mesh: Mesh, obliques: list[dict], p: dict):
+def _texture_split(mesh: Mesh, obliques: list[dict], p: dict, built: int | None = None):
     """Give each triangle the oblique that looks most squarely at it. Returns the untextured rest and textured chunks.
 
     Occlusion is not handled: a tree or a neighbour in front of a facade ends up painted on it.
+    built is the BBR construction year: obliques from that year or earlier are skipped, since the building may not
+    have stood yet when they were taken (the photo then shows the ground or the trees there before).
     """
     rest = Mesh()
     groups = {}
+    usable = [i for i, ob in enumerate(obliques) if built is None or int(ob["dato"][:4]) > built]
     for a, b, c, n, color in mesh._tris:
         centroid = (a + b + c) / 3
         best, best_score, best_uv = None, p["skraafoto_min_vinkel"], None
-        for i, ob in enumerate(obliques):
+        for i in usable:
+            ob = obliques[i]
             to_camera = ob["camera"] - centroid
             score = float(np.dot(n, to_camera / np.linalg.norm(to_camera)))
             if score <= best_score:
@@ -650,7 +804,7 @@ def _glb(parts: list[dict], origin: tuple[float, float, float], root: str, extra
             Image.fromarray(img).save(buf, format="JPEG", quality=85)
             gltf["images"].append({"bufferView": raw_view(buf.getvalue()), "mimeType": "image/jpeg"})
             gltf["textures"].append({"sampler": 0, "source": i})
-            gltf["materials"].append({"name": f"skraafoto {i}", "doubleSided": True,
+            gltf["materials"].append({"name": f"foto {i}", "doubleSided": True,
                                       "extensions": {"KHR_materials_unlit": {}},
                                       "pbrMetallicRoughness": {"baseColorTexture": {"index": i},
                                                                "metallicFactor": 0.0, "roughnessFactor": 1.0}})
@@ -725,8 +879,12 @@ def _glb(parts: list[dict], origin: tuple[float, float, float], root: str, extra
 def write(out_dir: Path, title: str, grid: Grid, parcel, dtm: np.ndarray, dsm: np.ndarray | None,
           classes: np.ndarray, ortho: np.ndarray | None, records: list[dict], obliques: list[dict] | None = None,
           gd_trees: list[dict] | None = None, vegetation: np.ndarray | None = None,
-          paving_types: np.ndarray | None = None, p: dict = DEFAULTS) -> dict:
+          paving_types: np.ndarray | None = None, terrain_texture: np.ndarray | None = None,
+          p: dict = DEFAULTS) -> dict:
     """Write terrain and building models as .glb, model.json and a self-contained model.html. Returns run.json info.
+
+    terrain_texture is a sharper orthophoto on the grid's extent (any resolution) draped on the terrain as a texture;
+    without it the run's orthophoto is used.
 
     obliques are the run's skråfoto entries (id, dato); with them the buildings are also written photo-textured.
     gd_trees are GeoDanmark's Trae/Traegruppe objects and vegetation the point cloud's vegetation points (x, y, z, class).
@@ -754,9 +912,17 @@ def write(out_dir: Path, title: str, grid: Grid, parcel, dtm: np.ndarray, dsm: n
     if paving_types is not None:
         for code, color in TYPE_COLORS.items():
             class_rgb[paving_types == code] = color
-    for name, colors, description in (("terraen.glb", ortho, "Terræn (DHM) med ortofoto-farver"),
-                                      ("terraen_klasser.glb", class_rgb, "Terræn (DHM) farvet efter arealtype"
-                                       + (" og belægningstype (udkast)" if paving_types is not None else ""))):
+    texture = terrain_texture if terrain_texture is not None else ortho
+    if texture is not None:
+        hf = _heightfield(dtm, inside, np.zeros((*dtm.shape, 3), dtype="uint8"), grid, step)
+        if hf:
+            pos, nrm, _, idx = hf
+            image, uv = _terrain_texture(texture, grid, inside, pos)
+            res_cm = round(grid.res * grid.width / texture.shape[1] * 100)
+            save("terraen.glb", [{"name": "terraen", "mesh": Mesh(), "textured": [(pos, nrm, uv, idx, 0)]}],
+                 f"Terræn (DHM) med ortofoto som tekstur ({res_cm} cm)", [image])
+    for name, colors, description in (("terraen_klasser.glb", class_rgb, "Terræn (DHM) farvet efter arealtype"
+                                       + (" og belægningstype (udkast)" if paving_types is not None else "")),):
         if colors is not None:
             mesh = Mesh()
             hf = _heightfield(dtm, inside, colors, grid, step)
@@ -765,14 +931,14 @@ def write(out_dir: Path, title: str, grid: Grid, parcel, dtm: np.ndarray, dsm: n
             save(name, [{"name": name.removesuffix(".glb"), "mesh": mesh}], description)
 
     foot = _wall_foot(dtm, grid, p)
+    passages = find_passages(records, grid, dsm, p) if dsm is not None else []
+    models = [r for r in records if r.get("_roof") is not None] + passages
     simple, measured = [], []
-    for r in records:
-        if r.get("_roof") is None:
-            continue
+    for r in models:
         mesh = Mesh()
         _building_mesh(r, mesh, p, foot)
-        simple.append({"name": f"bygning {r['nr']}", "mesh": mesh, "extras": public(r)})
-        cells = r["_roof_cells"]
+        simple.append({"name": f"bygning {r['nr']}", "mesh": mesh, "extras": r.get("_extras") or public(r)})
+        cells = r.get("_roof_cells")
         if dsm is not None and cells is not None and cells.any():
             rows, cols = np.nonzero(cells)
             window = (rows.min(), rows.max() + 1, cols.min(), cols.max() + 1)
@@ -796,16 +962,17 @@ def write(out_dir: Path, title: str, grid: Grid, parcel, dtm: np.ndarray, dsm: n
         crops = fetch_obliques(obliques, parcel, z_range, p)
         if crops:
             textured, used = [], set()
-            for r in records:
-                if r.get("_roof") is None:
-                    continue
+            for r in models:
                 mesh = Mesh()
                 _building_mesh(r, mesh, p, foot)
-                rest, chunks = _texture_split(mesh, crops, p)
+                built = r["opfoerelsesaar"]
+                rest, chunks = _texture_split(mesh, crops, p, int(built) if str(built or "").isdigit() else None)
                 used |= {c[4] for c in chunks}
-                textured.append({"name": f"bygning {r['nr']}", "mesh": rest, "textured": chunks, "extras": public(r)})
+                textured.append({"name": f"bygning {r['nr']}", "mesh": rest, "textured": chunks,
+                                 "extras": r.get("_extras") or public(r)})
             save("bygninger_skraafoto.glb", textured, "Bygninger med skråfotos som tekstur (hver flade får det billede, "
-                 "der ser mest vinkelret på den). Træer og naboer foran en facade kommer med på facaden",
+                 "der ser mest vinkelret på den). Træer og naboer foran en facade kommer med på facaden. "
+                 "Bygninger opført i skråfotoets år eller senere har BBR-farver",
                  [c["image"] for c in crops])
             textured_info = [{"retning": c["retning"], "id": c["id"], "dato": c["dato"], "brugt": i in used}
                              for i, c in enumerate(crops)]
@@ -834,7 +1001,8 @@ def write(out_dir: Path, title: str, grid: Grid, parcel, dtm: np.ndarray, dsm: n
     html = (MODEL_TEMPLATE.replace("__TITLE__", title)
             .replace("__DATA__", json.dumps({"files": files, "glb": payload, "meta": meta}, ensure_ascii=False)))
     (out_dir / "model.html").write_text(html, encoding="utf-8")
-    return {"origo_epsg25832_dvr90": list(origin), "filer": list(files), "bygninger": len(simple),
+    return {"origo_epsg25832_dvr90": list(origin), "filer": list(files), "bygninger": len(simple) - len(passages),
+            "gennemgange": [r["_extras"] for r in passages],
             "tage_maalt": len(measured), "skraafotos": textured_info,
             "traeer": {"i_alt": len(trees), "geodanmark": sum(t["kilde"] == "GeoDanmark" for t in trees),
                        "hoejdemodel": sum(t["kilde"] == "Højdemodel" for t in trees),
@@ -866,6 +1034,7 @@ MODEL_TEMPLATE = """<!doctype html>
 </head>
 <body>
 <aside>
+  <a class="muted" href="../../../index.html">← Alle ejendomme</a> · <a class="muted" href="../../viewer.html">Kort</a>
   <h1>__TITLE__</h1>
   <div class="muted">3D-model af ejendommen. Træk for at dreje, scroll for at zoome, højreklik og træk for at flytte.</div>
   <h2>Lag</h2>

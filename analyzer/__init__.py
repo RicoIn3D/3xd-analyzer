@@ -1,3 +1,3 @@
 """Analyzer: classify outdoor areas into paving, grass, shrubs and trees."""
 
-VERSION = "0.6.1"
+VERSION = "0.6.2"

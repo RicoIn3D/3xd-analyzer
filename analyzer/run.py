@@ -24,6 +24,7 @@ from sideprojekt_3d import model3d
 
 from . import VERSION, classify, outputs, paving
 from . import buildings as bldg
+from . import index as run_index
 from .classes import BYGNING, NAMES, UDENFOR
 from .grid import Grid
 from .sources import SourceUnavailable, dataforsyningen, datafordeler, open_rasters, osm, punktsky, skraafoto
@@ -184,6 +185,7 @@ def main() -> None:
     hover = {}
     skraa_images = []
     dsm = dtm = lidar = None
+    background_year = None
     if has_token:
         ortho_years = [int(y) for y in args.orto_years.split(",")]
         for year in ortho_years:
@@ -194,7 +196,8 @@ def main() -> None:
                 rgb = rgb["billede"]
                 outputs.rgb_png(run_dir / "output" / "lag" / f"orto_{year}.png", rgb)
                 layers.append({"navn": f"Ortofoto {year}", "fil": f"output/lag/orto_{year}.png", "type": "base"})
-                background = rgb if background is None else background
+                if background is None:
+                    background, background_year = rgb, year
         cir, cir_year = None, None
         for year in ortho_years:
             orto_index = len(src.items)
@@ -349,12 +352,19 @@ def main() -> None:
     # 6. 3D model: terrain and buildings as .glb for Unity and model.html
     model_info = None
     if dtm is not None:
+        terrain_texture = None
+        if background_year is not None:
+            # Sharper orthophoto for the 3D terrain only; the analysis stays on the 0.25 m grid
+            fine = Grid(grid.xmin, grid.ymin, grid.xmax, grid.ymax, model3d.DEFAULTS["terraen_tekstur_m"])
+            fine_rgb = src.fetch(f"Ortofoto {background_year} RGB til 3D-terræn (Dataforsyningen)",
+                                 dataforsyningen.orthophoto, fine, background_year)
+            terrain_texture = fine_rgb["billede"] if fine_rgb is not None else None
         try:
             model_info = model3d.write(out / "model", f"Analyzer 3D – BFE {args.bfe}", grid, parcel, dtm, dsm, classes,
                                        background, bld_records, obliques=skraa_images,
                                        gd_trees=gdk["traeer"] if gdk else None,
                                        vegetation=lidar["vegetation"] if lidar else None,
-                                       paving_types=paving_types)
+                                       paving_types=paving_types, terrain_texture=terrain_texture)
         except Exception as e:  # the model is an extra; never lose the run over it
             model_info = {"fejl": redact(f"{type(e).__name__}: {e}")}
             traceback.print_exc()
@@ -397,6 +407,7 @@ def main() -> None:
         (run_dir / "evaluering.md").write_text(template, encoding="utf-8")
 
     _append_overview(run_name, args.bfe, method, src.items, metrics, valid_area)
+    run_index.write(RUNS)
     print(f"Færdig: {run_dir.relative_to(ROOT)}/viewer.html")
     if model_info and "filer" in model_info:
         print(f"  3D-model: {run_dir.relative_to(ROOT)}/output/model/model.html ({model_info['bygninger']} bygninger)")
