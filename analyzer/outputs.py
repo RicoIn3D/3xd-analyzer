@@ -290,6 +290,7 @@ VIEWER_TEMPLATE = """<!doctype html>
 </head>
 <body>
 <aside>
+  <a class="muted" href="../index.html">← Alle ejendomme</a>
   <h1>__TITLE__</h1>
   <div class="muted" id="meta"></div>
   <div id="warn" class="warn" hidden></div>
