@@ -337,6 +337,7 @@ def main() -> None:
                                    lidar["antal"] if lidar else None, lidar["år"] if lidar else None)
         if bld_records:
             model3d.fit_roofs(bld_records, grid, dsm)
+            model3d.estimate_overhang(bld_records)
             bld_summary = bldg.summary(bld_records)
             if bbr is not None:
                 src.items[bbr_index]["note"] = (f"{bld_summary['med_bbr']} af {bld_summary['antal']} bygninger på "

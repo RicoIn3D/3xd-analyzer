@@ -183,6 +183,7 @@ def analyse(footprints: list[dict], bbr: dict | None, grid: Grid, parcel, dsm: n
             "geodanmark_tagkant_m": None, "geodanmark_hoejde_metode": props.get("vertikalStedfaestelsesmetode"),
             "geodanmark_hoejde_noejagtighed_m": props.get("vertikalNoejagtighed"),
             "model_tagform": None, "model_tagfod_m": None, "model_tagryg_m": None, "model_afvigelse_m": None,
+            "model_udhaeng_m": None, "model_udhaeng_kilde": None, "_maalested": props.get("maalestedBygning"),
             "_ground_z": None, "_base_z": None, "_top_ground_z": None, "_roof_cells": None, "_fit_cells": None,
             "_wall_code": wall_code, "_use_code": str(b.get("byg021BygningensAnvendelse") or "") if b else "",
         }
@@ -258,7 +259,8 @@ FIELDS = ("nr", "anvendelse", "opfoerelsesaar", "ombygningsaar", "etager", "tagm
           "mulig_asbest", "tagform", "taghaeldning_grader", "laengderetning", "grundplan_m2",
           "bebygget_areal_bbr_m2", "tagareal_m2", "hoejde_median_m", "hoejde_max_m", "flad_andel",
           "tag_daekning", "geodanmark_tagkant_m", "geodanmark_hoejde_metode", "geodanmark_hoejde_noejagtighed_m",
-          "model_tagform", "model_tagfod_m", "model_tagryg_m", "model_afvigelse_m",
+          "model_tagform", "model_tagfod_m", "model_tagryg_m", "model_afvigelse_m", "model_udhaeng_m",
+          "model_udhaeng_kilde",
           "tagmateriale_kode", "bbr_fundet", "bbr_id", "geodanmark_id")
 
 
