@@ -46,6 +46,8 @@ from analyzer.sources.skraafoto import STAC_URL, project
 DEFAULTS = {
     "terraen_skridt_px": 2,       # terrain mesh uses every n-th grid cell (0.5 m on the 0.25 m grid)
     "min_tagfod_m": 2.0,          # eaves are never lower than this above ground
+    "min_tagfod_maalt_m": 1.0,    # same floor for eaves fitted to the surface model: the ground is the median around
+                                  # the building, so on a slope the downhill eaves are measured lower than they stand
     "etagehoejde_m": 3.0,         # height per BBR storey when the surface model has no height for a building
     "tondetag_strimler": 6,       # strips per roof side approximating a barrel roof
     "afvigelse_skala_m": 1.0,     # deviation shown as full red (roof higher) or blue (lower) in the measured roof
@@ -224,7 +226,8 @@ def fit_roofs(records: list[dict], grid: Grid, dsm: np.ndarray | None, p: dict =
                 roof.update({k: parts[0][k] for k in ("c", "a", "b", "L", "W", "eaves", "ridge")})
                 roof["parts"] = parts
                 wing_count = sum(1 for pt in parts if pt["kind"] != "flat")
-                label = f"{label} ({wing_count} fløje)"
+                straight = sum(1 for pt in parts if pt.get("variant") == "lige fald")
+                label = f"{label} ({wing_count} fløje" + (f", {straight} med lige fald fra kip" if straight else "") + ")"
             else:
                 _fit_heights(roof, r["_fit_cells"], grid, dsm, p)
         r["_roof"] = roof
@@ -253,7 +256,7 @@ def _fit_heights(roof: dict, cells: np.ndarray, grid: Grid, dsm: np.ndarray, p: 
         else:
             (eaves, rise), *_ = np.linalg.lstsq(np.column_stack([np.ones(keep.sum()), f[keep]]), z[keep], rcond=None)
         keep = ~np.isnan(z) & (np.abs(z - eaves - rise * f) < p["tilpasning_afviger_m"])
-    eaves = max(float(eaves), p["min_tagfod_m"])
+    eaves = max(float(eaves), p["min_tagfod_maalt_m"])
     roof["eaves"], roof["ridge"] = eaves, max(eaves + float(rise), eaves)
 
 
@@ -414,7 +417,7 @@ def _fit_wings(roof: dict, wings, fit_cells: np.ndarray, grid: Grid, dsm: np.nda
         mask = np.zeros(fit_cells.shape, dtype=bool)
         mask[rows[core], cols[core]] = True
         touch = next(((j, e) for j, other in enumerate(cores) if (e := _shared_edge(rect, other))), None)
-        best = None
+        candidates = []
         for along_u in (True, False):
             ext = list(rect)
             if touch is not None:
@@ -425,7 +428,17 @@ def _fit_wings(roof: dict, wings, fit_cells: np.ndarray, grid: Grid, dsm: np.nda
                     ext[3 if side > 0 else 2] = (o_v0 + o_v1) / 2
                 elif axis == "u" and along_u:
                     ext[1 if side > 0 else 0] = (o_u0 + o_u1) / 2
-            part = _wing_roof(roof, c, a, b, ext, along_u)
+            candidates.append(_wing_roof(roof, c, a, b, ext, along_u))
+        if touch is not None:
+            # The neighbour's roof slope running straight on over the wing: one plane, high side at the shared edge
+            j, (axis, side) = touch
+            mono = _wing_roof(roof, c, a, b, rect, axis == "v")
+            mono["kind"] = "mono"
+            mono["side"] = float(side) if axis == "v" else -float(side)
+            mono["variant"] = "lige fald"
+            candidates.append(mono)
+        best = None
+        for part in candidates:
             _fit_heights(part, mask, grid, dsm, p)
             diff = dsm[rows[core], cols[core]] - _single_z(part, x[core], y[core])
             err = float(np.nanmean(np.abs(diff)))
