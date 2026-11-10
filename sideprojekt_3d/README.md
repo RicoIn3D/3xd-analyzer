@@ -104,6 +104,8 @@ Terrænet deles i ét mesh pr. arealtype. Belægningen deles yderligere efter de
 4. Projicer splatten (eller fotoene med de fundne kameraer) på facaderne i stedet for skråfotoet, og vis splatten i `model.html` ved siden af.
 5. Sammenlign med skråfoto-teksturen. Notér licens og kilde for hvert billede i `run.json`.
 
+**Note (PoC, 2026-11-10):** Firmaet har et 360°-kamera og folk i marken, og en lidar til ca. 100.000 kr. er en mulighed. Egne billeder og egen lidar har ingen licensbegrænsninger, kun GDPR (slør personer og nummerplader). Licenser følger modelvægtene, også i skyen: Solv3R og SHARP kun til forskning og evaluering. AnySplat er MIT, men bygger på VGGT, og `facebook/VGGT-1B` er CC BY-NC 4.0, så oprindelsen skal afklares før et produkt (alternativ: `VGGT-1B-Commercial` med særlicens, eller COLMAP og gsplat). Mapillary er CC BY-SA (kildeangivelse, share-alike på afledte modeller). Ollama hjælper ikke her: den kører sprogmodeller, ikke 3D-modeller. Mere GPU fås ved at leje en cloud-GPU eller køre AnySplat-demoen som Hugging Face Space på betalt GPU.
+
 **Ikke formålet:** at måle. Udhæng og mål kommer fra BBR, DHM og evt. fotogrammetri med mange billeder.
 
 ## Klimadatastyrelsens 3D Ortofoto (3DO)
