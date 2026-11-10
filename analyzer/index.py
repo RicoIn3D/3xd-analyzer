@@ -9,6 +9,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 RUNS = ROOT / "runs"
 FALLBACK = {"sentinel2": "Sentinel-2-fallback (Dataforsyningen ikke tilgængelig)"}
+# The test case (Hjørring) stays on top of the front page; other properties follow by latest run
+DEFAULT_BFE = "5522814"
 
 
 def _runs(runs_dir: Path) -> list[dict]:
@@ -74,7 +76,9 @@ def write(runs_dir: Path = RUNS) -> Path:
     for run in _runs(runs_dir):
         by_bfe.setdefault(run["bfe"], []).append(run)
     sections = []
-    for bfe, runs in sorted(by_bfe.items(), key=lambda kv: max(r["tid"] for r in kv[1]), reverse=True):
+    ordered = sorted(by_bfe.items(), key=lambda kv: max(r["tid"] for r in kv[1]), reverse=True)
+    ordered.sort(key=lambda kv: kv[0] != DEFAULT_BFE)  # stable: keeps the time order for the rest
+    for bfe, runs in ordered:
         runs.sort(key=lambda r: r["tid"], reverse=True)
         # The latest usable run is the one to open; a fallback run is only on top when nothing better exists
         best = next((r for r in runs if not _warning(r)), runs[0])
@@ -123,7 +127,7 @@ PAGE = """<!doctype html>
 <body>
 <main>
   <h1>Analyzer – ejendomme</h1>
-  <div class="muted">Seneste brugbare run pr. ejendom øverst. Ny ejendom: <code>./run.sh --bfe &lt;nr&gt;</code>.
+  <div class="muted">Testcasen (Hjørring, BFE 5522814) øverst, derefter ejendommen med nyeste run. Seneste brugbare run pr. ejendom. Ny ejendom: <code>./run.sh --bfe &lt;nr&gt;</code>.
     Siden skrives efter hver run.</div>
   <div class="wrap"><table>
     <tr><th>BFE</th><th>Run</th><th>Åbn</th><th>Metode</th><th>Udearealer</th><th>Note</th></tr>
