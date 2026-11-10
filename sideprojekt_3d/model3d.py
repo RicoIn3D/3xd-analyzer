@@ -710,12 +710,12 @@ def find_passages(records: list[dict], grid: Grid, dsm: np.ndarray, p: dict = DE
                 continue
             shared = [g for g in shapely.get_parts(gi.boundary.buffer(0.05).intersection(gj.boundary))
                       if isinstance(g, LineString)]
-            line = shapely.line_merge(MultiLineString(shared)) if shared else None
-            if line is None or line.is_empty or line.length < p["gennemgang_min_vaeg_m"]:
+            line = _straight(shapely.line_merge(MultiLineString(shared))) if shared else None
+            if line is None or line.length < p["gennemgang_min_vaeg_m"]:
                 continue
             sides = []
             for r, g in ((ri, gi), (rj, gj)):
-                band = g.intersection(line.buffer(p["gennemgang_baand_m"], cap_style="flat"))
+                band = g.intersection(_band(line, p["gennemgang_baand_m"]))
                 rows, cols, x, y = _cell_centres(r["_roof_cells"], grid)
                 inside = shapely.contains_xy(band, x, y)
                 if inside.sum() < p["tilpasning_min_celler"]:
@@ -732,13 +732,36 @@ def find_passages(records: list[dict], grid: Grid, dsm: np.ndarray, p: dict = DE
                 sides.append((g, reach) if share >= p["gennemgang_min_andel"] else None)
             if any(sd is None for sd in sides):
                 continue
-            parts = [g.intersection(line.buffer(reach, cap_style="flat")) for g, reach in sides]
+            parts = [g.intersection(_band(line, reach)) for g, reach in sides]
             geom = shapely.union_all(parts).buffer(0.05).buffer(-0.05)
             if geom.is_empty or min(reach for _, reach in sides) < p["gennemgang_min_bredde_m"] / 2:
                 continue
             ri["_geom_3d"], rj["_geom_3d"] = gi.difference(geom), gj.difference(geom)
             found.append(_passage_record(len(found) + 1, geom, ri, grid, dsm, p))
     return found
+
+
+def _straight(line) -> LineString | None:
+    """The shared wall as one straight line between its outermost points.
+
+    The shared boundary picks up a few centimetres of the facades at its ends (boundary.buffer(0.05)). A flat-capped
+    buffer of that bent line ends square to the facade stub instead of to the wall, which cut a triangle out of the
+    passage and left it standing in the passage as a sliver of the building.
+    """
+    if line is None or line.is_empty:
+        return None
+    pts = np.vstack([np.asarray(g.coords) for g in shapely.get_parts(line)])
+    rel = pts - pts.mean(axis=0)
+    t = rel @ np.linalg.svd(rel, full_matrices=False)[2][0]
+    return LineString([pts[t.argmin()], pts[t.argmax()]])
+
+
+def _band(line: LineString, dist: float) -> Polygon:
+    """Band within dist of a straight line, with its ends pushed past the facades so it spans the building."""
+    (x0, y0), (x1, y1) = line.coords
+    d = np.array([x1 - x0, y1 - y0]) / line.length * dist
+    longer = LineString([(x0 - d[0], y0 - d[1]), (x1 + d[0], y1 + d[1])])
+    return longer.buffer(dist, cap_style="flat")
 
 
 def _passage_record(n: int, geom, parent: dict, grid: Grid, dsm: np.ndarray, p: dict) -> dict:
