@@ -63,6 +63,11 @@ DEFAULTS = {
     "gennemgang_min_bredde_m": 1.5,  # narrower bands are a ridge or a chimney, not a passage
     "terraen_tekstur_m": 0.1,     # terrain texture resolution: the orthophoto is fetched separately at this size
     "tilpasning_afviger_m": 0.5,
+    "floej_max_fyldning": 0.9,    # a gable or hip footprint filling less of its rectangle is split into wings
+    "floej_min_areal_m2": 6.0,    # smaller pieces (bays, porches) are not wings: they extend a wing or sit at eaves
+    "floej_min_bredde_m": 2.0,
+    "floej_min_daekning": 0.85,   # the wings must cover this share of the footprint, else one roof is kept
+    "floej_snap_m": 0.3,          # outline corners closer than this along an axis share one cut line
     "skraafoto_min_vinkel": 0.25,  # an oblique textures a triangle only when it faces the camera at least this much
                                    # (cosine between the triangle normal and the direction to the camera)
     "skraafoto_max_side_px": 3000,  # texture size limit per oblique
@@ -211,7 +216,17 @@ def fit_roofs(records: list[dict], grid: Grid, dsm: np.ndarray | None, p: dict =
                 roof["side"] = -1.0
         if (not uncertain and dsm is not None and r["_fit_cells"] is not None
                 and r["_fit_cells"].sum() >= p["tilpasning_min_celler"]):
-            _fit_heights(roof, r["_fit_cells"], grid, dsm, p)
+            # An L- or T-shaped house has one roof per wing; one roof over the whole rectangle puts the ridge
+            # in the wrong place and the fit flattens it
+            wings = _wings(r["_geom"], c, a, b, p) if kind in ("gable", "hip") else None
+            parts = _fit_wings(roof, wings, r["_fit_cells"], grid, dsm, p) if wings else None
+            if parts:
+                roof.update({k: parts[0][k] for k in ("c", "a", "b", "L", "W", "eaves", "ridge")})
+                roof["parts"] = parts
+                wing_count = sum(1 for pt in parts if pt["kind"] != "flat")
+                label = f"{label} ({wing_count} fløje)"
+            else:
+                _fit_heights(roof, r["_fit_cells"], grid, dsm, p)
         r["_roof"] = roof
         r["model_tagform"] = label
         r["model_tagfod_m"] = round(roof["eaves"], 1)
@@ -260,13 +275,259 @@ def _roof_shape(roof: dict, x, y):
     return 1 - (v / half_w) ** 2  # barrel, parabolic profile across the building
 
 
-def _roof_z(roof: dict, x, y):
-    """Absolute roof height at world coordinates x, y."""
+def _single_z(roof: dict, x, y):
     return roof["ground"] + roof["eaves"] + (roof["ridge"] - roof["eaves"]) * _roof_shape(roof, x, y)
+
+
+def _local(roof: dict, x, y):
+    """Coordinates along the roof's ridge (u) and across it (v)."""
+    c, a, b = roof["c"], roof["a"], roof["b"]
+    dx, dy = np.asarray(x, dtype=float) - c[0], np.asarray(y, dtype=float) - c[1]
+    return dx * a[0] + dy * a[1], dx * b[0] + dy * b[1]
+
+
+def _roof_z(roof: dict, x, y):
+    """Absolute roof height at world coordinates x, y.
+
+    A roof with wings is the highest wing roof over the point; that is what makes valleys where a wing meets the
+    main roof. A point outside every wing (a small corner of the outline) takes the nearest wing's edge height.
+    """
+    parts = roof.get("parts")
+    if not parts:
+        return _single_z(roof, x, y)
+    x, y = np.atleast_1d(np.asarray(x, dtype=float)), np.atleast_1d(np.asarray(y, dtype=float))
+    z = np.vstack([_single_z(part, x, y) for part in parts])  # each wing's roof, clipped at its rectangle
+    dist = []
+    for part in parts:
+        u, v = _local(part, x, y)
+        dist.append(np.hypot(np.maximum(np.abs(u) - part["L"], 0), np.maximum(np.abs(v) - part["W"], 0)))
+    dist = np.vstack(dist)
+    inside = dist < 1e-3
+    out = np.max(np.where(inside, z, -np.inf), axis=0)
+    missing = ~inside.any(axis=0)
+    if missing.any():
+        nearest = np.argmin(dist[:, missing], axis=0)
+        out[missing] = z[nearest, np.nonzero(missing)[0]]
+    return out
+
+
+def _wings(geom, c, a, b, p: dict):
+    """Rectangles (u0, u1, v0, v1) in the building frame that make up an L-, T- or U-shaped footprint.
+
+    Returns (wings, rest): wings largest first, rest the small pieces (bays, porches). None when the footprint is
+    close enough to a rectangle for one roof, or not rectilinear enough to split.
+    """
+    if geom.geom_type != "Polygon" or geom.area <= 0:
+        return None
+    if geom.area / geom.minimum_rotated_rectangle.area >= p["floej_max_fyldning"]:
+        return None
+    local = affinity.affine_transform(geom, [a[0], a[1], b[0], b[1], -(c @ a), -(c @ b)])
+    coords = np.asarray(local.exterior.coords)
+
+    def cuts(values):
+        groups = []
+        for val in np.sort(values):
+            if groups and val - groups[-1][-1] <= p["floej_snap_m"]:
+                groups[-1].append(val)
+            else:
+                groups.append([val])
+        return [float(np.mean(g)) for g in groups]
+
+    us, vs = cuts(coords[:, 0]), cuts(coords[:, 1])
+    if len(us) < 2 or len(vs) < 2 or len(us) * len(vs) > 900:
+        return None
+    filled = np.array([[local.intersection(box(us[i], vs[j], us[i + 1], vs[j + 1])).area
+                        >= 0.5 * (us[i + 1] - us[i]) * (vs[j + 1] - vs[j])
+                        for j in range(len(vs) - 1)] for i in range(len(us) - 1)])
+    rects = []
+    while filled.any():
+        best, best_area = None, 0.0
+        n_u, n_v = filled.shape
+        for i0 in range(n_u):
+            for i1 in range(i0, n_u):
+                for j0 in range(n_v):
+                    for j1 in range(j0, n_v):
+                        if not filled[i0:i1 + 1, j0:j1 + 1].all():
+                            break
+                        area = (us[i1 + 1] - us[i0]) * (vs[j1 + 1] - vs[j0])
+                        if area > best_area:
+                            best, best_area = (i0, i1, j0, j1), area
+        i0, i1, j0, j1 = best
+        filled[i0:i1 + 1, j0:j1 + 1] = False
+        rects.append((us[i0], us[i1 + 1], vs[j0], vs[j1 + 1]))
+    big = [rc for rc in rects if (rc[1] - rc[0]) * (rc[3] - rc[2]) >= p["floej_min_areal_m2"]
+           and min(rc[1] - rc[0], rc[3] - rc[2]) >= p["floej_min_bredde_m"]]
+    rest = [rc for rc in rects if rc not in big]
+    if len(big) < 2 or sum((rc[1] - rc[0]) * (rc[3] - rc[2]) for rc in big) < p["floej_min_daekning"] * geom.area:
+        return None
+    return big, rest
+
+
+def _wing_roof(base: dict, c, a, b, rect, along_u: bool) -> dict:
+    """Roof dict for one wing rectangle (building frame), ridge along u or along v."""
+    u0, u1, v0, v1 = rect
+    centre = c + (u0 + u1) / 2 * a + (v0 + v1) / 2 * b
+    if along_u:
+        ra, rb, half_l, half_w = a, b, (u1 - u0) / 2, (v1 - v0) / 2
+    else:
+        ra, rb, half_l, half_w = b, -a, (v1 - v0) / 2, (u1 - u0) / 2
+    return {**{k: base[k] for k in ("kind", "ground", "eaves", "ridge")}, "side": 1.0,
+            "c": centre, "a": ra, "b": rb, "L": half_l, "W": half_w}
+
+
+def _shared_edge(rect, other, tol: float = 0.05):
+    """Axis ('u' or 'v') and side (+1/-1) along which rect touches other over at least 1 m, else None."""
+    u0, u1, v0, v1 = rect
+    o_u0, o_u1, o_v0, o_v1 = other
+    if min(u1, o_u1) - max(u0, o_u0) >= 1.0:
+        if abs(v1 - o_v0) <= tol:
+            return "v", 1
+        if abs(v0 - o_v1) <= tol:
+            return "v", -1
+    if min(v1, o_v1) - max(v0, o_v0) >= 1.0:
+        if abs(u1 - o_u0) <= tol:
+            return "u", 1
+        if abs(u0 - o_u1) <= tol:
+            return "u", -1
+    return None
+
+
+def _fit_wings(roof: dict, wings, fit_cells: np.ndarray, grid: Grid, dsm: np.ndarray, p: dict) -> list[dict] | None:
+    """Fit one roof per wing to the surface model. Returns the wing roofs, main wing first, or None.
+
+    Each wing tries a ridge along and across its rectangle and keeps the one closer to the surface model. A wing
+    whose ridge runs into a wing it touches is extended to that wing's ridge line, so the two roofs meet in valleys.
+    """
+    big, rest = wings
+    c, a, b = roof["c"], roof["a"], roof["b"]
+    rows, cols, x, y = _cell_centres(fit_cells, grid)
+    u = (x - c[0]) * a[0] + (y - c[1]) * a[1]
+    v = (x - c[0]) * b[0] + (y - c[1]) * b[1]
+    parts, cores = [], []
+    for k, rect in enumerate(big):
+        u0, u1, v0, v1 = rect
+        core = (u >= u0) & (u <= u1) & (v >= v0) & (v <= v1)
+        if core.sum() < p["tilpasning_min_celler"]:
+            if k == 0:
+                return None
+            continue
+        mask = np.zeros(fit_cells.shape, dtype=bool)
+        mask[rows[core], cols[core]] = True
+        touch = next(((j, e) for j, other in enumerate(cores) if (e := _shared_edge(rect, other))), None)
+        best = None
+        for along_u in (True, False):
+            ext = list(rect)
+            if touch is not None:
+                j, (axis, side) = touch
+                o_u0, o_u1, o_v0, o_v1 = cores[j]
+                # Ridge across the shared edge: run it into the other wing up to that wing's centre line
+                if axis == "v" and not along_u:
+                    ext[3 if side > 0 else 2] = (o_v0 + o_v1) / 2
+                elif axis == "u" and along_u:
+                    ext[1 if side > 0 else 0] = (o_u0 + o_u1) / 2
+            part = _wing_roof(roof, c, a, b, ext, along_u)
+            _fit_heights(part, mask, grid, dsm, p)
+            diff = dsm[rows[core], cols[core]] - _single_z(part, x[core], y[core])
+            err = float(np.nanmean(np.abs(diff)))
+            if best is None or err < best[0]:
+                best = (err, part)
+        parts.append(best[1])
+        cores.append(rect)
+    if len(parts) < 2:
+        return None
+    for rect in rest:
+        _attach(rect, parts, cores, c, a, b)
+    return parts
+
+
+def _attach(rect, parts: list[dict], cores: list, c, a, b) -> None:
+    """A small piece (bay, porch) at a wing's gable end extends that wing; elsewhere it gets a flat roof at eaves."""
+    for part, core in zip(parts, cores):
+        edge = _shared_edge(rect, core)
+        if edge is None:
+            continue
+        axis, _ = edge
+        along_u = abs(float(part["a"] @ a)) > 0.5
+        corners = np.array([c + uu * a + vv * b for uu in rect[:2] for vv in rect[2:]])
+        pu, pv = _local(part, corners[:, 0], corners[:, 1])
+        if (axis == "u") == along_u and pv.min() >= -part["W"] - 0.05 and pv.max() <= part["W"] + 0.05:
+            lo, hi = min(pu.min(), -part["L"]), max(pu.max(), part["L"])
+            part["c"] = part["c"] + (lo + hi) / 2 * part["a"]
+            part["L"] = (hi - lo) / 2
+        else:
+            flat = _wing_roof(part, c, a, b, rect, True)
+            flat.update(kind="flat", ridge=part["eaves"], eaves=part["eaves"])
+            parts.append(flat)
+            cores.append(rect)
+        return
+
+
+def _plane(part: dict, poly: Polygon, origin) -> np.ndarray:
+    """Plane z = p0 + p1*(x-ox) + p2*(y-oy) through the part's roof over the polygon."""
+    xy = np.vstack([np.asarray(poly.exterior.coords), np.asarray(poly.representative_point().coords)])
+    z = _single_z(part, xy[:, 0], xy[:, 1])
+    m = np.column_stack([np.ones(len(xy)), xy[:, 0] - origin[0], xy[:, 1] - origin[1]])
+    return np.linalg.lstsq(m, z, rcond=None)[0]
+
+
+def _halfplane(poly: Polygon, coef: np.ndarray, origin) -> Polygon:
+    """The part of poly's bounding box where coef[0] + coef[1]*(x-ox) + coef[2]*(y-oy) >= 0."""
+    x0, y0, x1, y1 = poly.bounds
+    ring = [(x0 - 1, y0 - 1), (x1 + 1, y0 - 1), (x1 + 1, y1 + 1), (x0 - 1, y1 + 1)]
+    f = [coef[0] + coef[1] * (px - origin[0]) + coef[2] * (py - origin[1]) for px, py in ring]
+    out = []
+    for i in range(4):
+        (pa, fa), (pb, fb) = (ring[i], f[i]), (ring[(i + 1) % 4], f[(i + 1) % 4])
+        if fa >= 0:
+            out.append(pa)
+        if (fa >= 0) != (fb >= 0):
+            t = fa / (fa - fb)
+            out.append((pa[0] + t * (pb[0] - pa[0]), pa[1] + t * (pb[1] - pa[1])))
+    return Polygon(out) if len(out) >= 3 else Polygon()
+
+
+def _composite_regions(roof: dict, strips: int) -> list[Polygon]:
+    """Planar pieces of a roof with wings: overlay the wings' planar pieces, then split each overlap where one
+    wing's plane rises above the other's (the valley line). The rest of the plane is left to the nearest wing."""
+    origin = roof["c"]
+    cells: list[tuple[Polygon, list[np.ndarray]]] = []
+    for part in roof["parts"]:
+        regs = [(g, _plane(part, g, origin)) for g in _regions(part, strips)]
+        nxt = []
+        for poly, planes in cells:
+            rest = poly
+            for g, pl in regs:
+                nxt += [(q, planes + [pl]) for q in _polygons(poly.intersection(g))]
+                rest = rest.difference(g)
+            nxt += [(q, planes) for q in _polygons(rest)]
+        covered = shapely.union_all([poly for poly, _ in cells]) if cells else Polygon()
+        for g, pl in regs:
+            nxt += [(q, [pl]) for q in _polygons(g.difference(covered))]
+        cells = nxt
+    out = []
+    for poly, planes in cells:
+        if len(planes) == 1:
+            out.append(poly)
+            continue
+        taken = Polygon()
+        for i, pi in enumerate(planes):
+            piece = poly
+            for j, pj in enumerate(planes):
+                if j != i:
+                    piece = piece.intersection(_halfplane(poly, pi - pj, origin))
+            piece = piece.difference(taken)
+            out += _polygons(piece)
+            taken = taken.union(piece)
+    union = shapely.union_all(out)
+    x0, y0, x1, y1 = union.bounds
+    out += _polygons(box(x0 - 50, y0 - 50, x1 + 50, y1 + 50).difference(union))
+    return [g.buffer(1e-4, join_style=2) for g in out]
 
 
 def _regions(roof: dict, strips: int) -> list[Polygon]:
     """Parts of the roof's rectangle in which the roof is planar (or nearly, for a barrel), in world coordinates."""
+    if roof.get("parts"):
+        return _composite_regions(roof, strips)
     half_l, half_w = roof["L"], roof["W"]
     kind = roof["kind"]
     if kind == "gable":
