@@ -82,6 +82,30 @@ Velegnet til en subagent. Oprettet 2026-11-03.
 
 Terrænet deles i ét mesh pr. arealtype. Belægningen deles yderligere efter de typer, `analyzer/paving.py` allerede finder. Materialerne får faste navne, som Unity og browseren kan erstatte med rigtige materialer (gentagne teksturer, fx fra ambientCG, CC0). Navnene i første omgang er `graes`, `buske`, `asfalt`, `fliser_sten_beton`, `grus` og `belaegning_ukendt`. Senere kan det blive et Unity Terrain med splatmap og græs som grass details.
 
+### Opgave 5: facader fra få fotos med Gaussian splats (ikke startet, aftalt 2026-11-10)
+
+**Problem:** skråfotos er ca. 10 cm pr. pixel. Klimadatastyrelsen hæver ikke opløsningen af hensyn til privatliv. Facaderne i `bygninger_skraafoto.glb` bliver derfor grove. Bedre facader skal komme fra jordhøjde: egne telefonfotos (5–10 rundt om huset) eller Mapillary (CC BY-SA, dækning varierer pr. gade).
+
+**Idé:** en feed-forward-model laver kamerapositioner, dybde og Gaussian splats ud fra få billeder uden kendte kamerapositioner og uden COLMAP. Splatten skaleres og placeres på vores model ud fra GeoDanmark-omridset og DHM-højderne og bruges til at forædle facadeteksturen. Én billede-metoder (SHARP) gætter det skjulte: brug kun til tekstur, aldrig til mål.
+
+**Kandidater (tjekket 2026-11-10):**
+
+| Model | Hvad den giver | Licens | Vurdering |
+|---|---|---|---|
+| AnySplat (InternRobotics/AnySplat, vægte `lhjiang/anysplat`) | Splats, dybde og kamerapositioner i ét kald fra 1 til flere hundrede billeder. Bygger på VGGT. Eksport som `.ply`. Har efteroptimering med gsplat (`src/post_opt`) | MIT, også vægtene | Førstevalg: må bruges i et produkt. Billederne skaleres til 448×448 px i modellen, så detaljen kommer først med efteroptimeringen i fuld opløsning. Hugging Face-demoen (alexnasa/AnySplat) er sat på pause |
+| Solv3R (arXiv 2611.02857, ubc-vision/solv3r) + SHARP (apple/ml-sharp) via filliptm/solv3r-demo | Solv3R: kamerapositioner og dybde pr. pixel, kan tage nye billeder ind løbende. SHARP: splat fra ét billede. Demoen træner splats med gsplat og eksporterer `.ply` | Demo Apache-2.0. Solv3R-vægte: NVIDIA License (ikke-kommerciel, kun forskning og evaluering). SHARP: kun forskning | Kun til prototype. Godt til at lægge nye billeder ind i en eksisterende løsning |
+
+**Hardware:** Ricos PC har NVIDIA GeForce RTX 3050 med 8 GB (WSL, driver 610.88). Nok til få billeder. SHARPs checkpoint er 2,8 GB. Solv3R-demoen kræver CUDA-toolkit 12.8 og på Windows Visual Studios C++-værktøjer (gsplat kompilerer sine kerner). AnySplat er udviklet med PyTorch 2.2 og CUDA 12.1 og bruger pytorch3d.
+
+**Trin:**
+1. Tag 5–10 fotos rundt om testhuset (BFE 4208619), eller hent Mapillary-billeder, når de er offentliggjort.
+2. Kør AnySplat lokalt; prøv efteroptimeringen i fuld opløsning. Sammenlign evt. med Solv3R-demoen.
+3. Placer splatten på modellen: skala og rotation fra kamerapositionerne mod GeoDanmark-omridset og DHM-tagkanten (fx ICP mod bygningens punkter fra punktskyen).
+4. Projicer splatten (eller fotoene med de fundne kameraer) på facaderne i stedet for skråfotoet, og vis splatten i `model.html` ved siden af.
+5. Sammenlign med skråfoto-teksturen. Notér licens og kilde for hvert billede i `run.json`.
+
+**Ikke formålet:** at måle. Udhæng og mål kommer fra BBR, DHM og evt. fotogrammetri med mange billeder.
+
 ## Klimadatastyrelsens 3D Ortofoto (3DO)
 
 - Labs-prototype på Dataforsyningen: https://dataforsyningen.dk/labs/4963. Tredimensionelt luftfoto lavet ud fra skråfotos, hvor facader kan ses.
