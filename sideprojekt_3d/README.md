@@ -90,6 +90,8 @@ Terrænet deles i ét mesh pr. arealtype. Belægningen deles yderligere efter de
 
 **Dobbelttjek 2026-11-03:** alle 8 GeoDanmark-bygninger ligger helt på ejendommen og har BBR (ingen delvist udeladt). Usikre tage (dækket af træer eller bygget efter skanningen) får ikke højde fra DHM, som ellers måler trækronerne: udhuset (nr. 7) gik fra 6,1 m til 3,0 m (BBR-etager). GeoDanmark-omridset er målt ved tagkanten, så det er 8–25 % større end BBR's bebyggede areal (ydervæg); facaderne i modellen står derfor ved tagkanten. Ikke tjekket: BBR-bygninger på ejendommen uden omrids i GeoDanmark (GraphQL kan kun slå op på id). Næste skridt: åbn `bygninger.glb` i Unity (glTFast) og sammenlign med CityWeft's gratis forhåndsvisning.
 
+**Rettelse v0.6.3 (2026-11-10), overdækkede gennemgange:** ved hver gennemgang gennem rækkehusene stod en hvid trekant. Den fælles væg mellem to bygninger fik et par cm facade med i hver ende, så båndet, der skærer gennemgangen ud, endte skråt. Det skar en trekant (ca. 2,2 m²) ud af gennemgangen, og den blev stående som et lille stykke af nabobygningen inde i gennemgangen. Nu skæres gennemgangen ud langs en ret linje mellem væggens ender, og båndet går ud over facaderne, så gennemgangen og husene på hver side slutter tæt.
+
 Før billederne laves en 3D-model af bygningerne på matriklen ud fra data, vi allerede har i v0.4:
 
 - Grundplan fra GeoDanmark, højder fra DHM overflade minus terræn, tagform, hældning og retning fra bygningsanalysen, etager, tagmateriale og ydervæg fra BBR. Terræn fra DHM, skåret til matriklen.
