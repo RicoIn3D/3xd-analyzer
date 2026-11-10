@@ -33,7 +33,11 @@ Idé: lav en 3D-model (Gaussian splatting eller farvelagt punktsky) af ejendomme
 
 ## Opgaver
 
-### Opgave 1: tagudhæng, facaden skal stå ved ydervæggen (ikke startet)
+### Opgave 1: tagudhæng, facaden skal stå ved ydervæggen (første version v0.8.0, 2026-11-10)
+
+**Bygget:** `estimate_overhang()` finder udhænget `d` pr. bygning, så omridset rykket `d` ind langs de frie kanter har BBR's bebyggede areal (`byg041`, målt ved ydervæggen). Vægge, der deles med en nabobygning eller en gennemgang, bliver stående. Loft 0,8 m, under 0,15 m bliver til 0. Åbne bygninger og omrids målt ved væg (GeoDanmark `maalestedBygning`) får intet udhæng. Uden brugbart BBR-areal: 0,4 m, dog 0 for småbygninger (BBR 9xx). `place_walls()` lægger vægomridset på 3D-omridset efter gennemgangene, og `_overhang_mesh()` tegner tag på det fulde omrids, stern (0,2 m) ved tagkanten, underside under udhænget og vægge ved vægomridset op til undersiden. Felterne `model_udhaeng_m` og `model_udhaeng_kilde` står i `bygninger.csv`.
+
+**Tal:** Hjørring rækkehuse 0,25–0,65 m (punktskyens jordpunkter under udhænget: 0,3–0,6 m). Testhuset med vinkel: 0,60 m, men jordpunkterne siger 0,3–0,4 m; BBR tæller nok ikke en åben overdækning med. Ikke gjort endnu: udhæng pr. side (tagfod/gavl) og kontrol mod jordpunkter i punktskyen. Analysen med kilder står i noten fra 2026-11-10 (tekniske tegninger i kommunale arkiver har ingen API og kan kun bruges manuelt).
 
 Velegnet til en subagent. Oprettet 2026-11-03.
 

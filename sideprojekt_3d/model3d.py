@@ -65,6 +65,12 @@ DEFAULTS = {
     "gennemgang_min_bredde_m": 1.5,  # narrower bands are a ridge or a chimney, not a passage
     "terraen_tekstur_m": 0.1,     # terrain texture resolution: the orthophoto is fetched separately at this size
     "tilpasning_afviger_m": 0.5,
+    "udhaeng_max_m": 0.8,         # roof overhang (outline at the roof edge, walls set back): larger is not believed
+    "udhaeng_min_m": 0.15,        # smaller is rounded to no overhang
+    "udhaeng_standard_m": 0.4,    # fallback for buildings that are not small (BBR 9xx) when BBR cannot be used
+    "udhaeng_nabo_m": 0.3,        # outline edges this close to another building are shared walls and stay put
+    "udhaeng_max_tab": 0.4,       # wall outline may lose at most this share of the outline's area
+    "udhaeng_stern_m": 0.2,       # roof thickness at the edge (fascia) and under the overhang (soffit)
     "floej_max_fyldning": 0.9,    # a gable or hip footprint filling less of its rectangle is split into wings
     "floej_min_areal_m2": 6.0,    # smaller pieces (bays, porches) are not wings: they extend a wing or sit at eaves
     "floej_min_bredde_m": 2.0,
@@ -618,6 +624,102 @@ def _wall_foot(dtm: np.ndarray, grid: Grid, p: dict):
     return foot
 
 
+def _free_edges(geom, others: list, p: dict):
+    """Outline edges not shared with another building (or passage): only these get an overhang."""
+    near = [o.buffer(p["udhaeng_nabo_m"]) for o in others if o is not None and o.distance(geom) < p["udhaeng_nabo_m"]]
+    return geom.boundary.difference(shapely.union_all(near)) if near else geom.boundary
+
+
+def _wall_outline(geom, d: float, free, p: dict):
+    """The outline moved in by d along its free edges, or None when that breaks the building apart."""
+    if d <= 0 or free.is_empty:
+        return geom
+    if free.equals(geom.boundary):
+        wall = geom.buffer(-d, join_style=2, mitre_limit=2.0)
+    else:
+        wall = geom.difference(free.buffer(d, cap_style=2, join_style=2, mitre_limit=2.0))
+    wall = shapely.union_all(_polygons(wall)) if not wall.is_empty else wall
+    if (wall.is_empty or len(_polygons(wall)) != len(_polygons(geom))
+            or wall.area < (1 - p["udhaeng_max_tab"]) * geom.area):
+        return None
+    return wall
+
+
+def _overhang_from_bbr(geom, bbr_area, free, p: dict) -> float | None:
+    """Overhang d at which the wall outline has BBR's built-up area (measured at the outer walls)."""
+    try:
+        target = float(bbr_area)
+    except (TypeError, ValueError):
+        return None
+    if target <= 0 or target >= geom.area or free.is_empty:
+        return None
+
+    def area(d):
+        wall = _wall_outline(geom, d, free, p)
+        return None if wall is None else wall.area
+
+    high = area(p["udhaeng_max_m"])
+    if high is None or high > target:
+        return None  # needs more than the cap: BBR leaves something out (open roofed area, other storey)
+    lo, hi = 0.0, p["udhaeng_max_m"]
+    for _ in range(30):
+        mid = (lo + hi) / 2
+        a = area(mid)
+        if a is None:
+            return None
+        lo, hi = (mid, hi) if a > target else (lo, mid)
+    return (lo + hi) / 2
+
+
+def estimate_overhang(records: list[dict], p: dict = DEFAULTS) -> None:
+    """Roof overhang per building: GeoDanmark draws the outline at the roof edge, BBR's area at the outer walls.
+
+    The overhang is the inward offset of the free edges (not walls shared with a neighbour) at which the outline
+    has BBR's built-up area. Sets model_udhaeng_m, model_udhaeng_kilde and r["_overhang"]; the walls themselves
+    are placed in write(), after passages are cut out.
+    """
+    for r in records:
+        r["_overhang"] = 0.0
+        geom = r["_geom"]
+        if r.get("_roof") is None or geom.geom_type != "Polygon":
+            continue
+        small = str(r.get("_use_code") or "").startswith("9")
+        if _is_open(r):
+            d, source = 0.0, "ingen (åben)"
+        elif r.get("_maalested") in ("Væg", "Tag og Væg"):
+            d, source = 0.0, "ingen (omrids målt ved væg)"
+        else:
+            others = [o["_geom"] for o in records if o is not r]
+            free = _free_edges(geom, others, p)
+            d = _overhang_from_bbr(geom, r["bebygget_areal_bbr_m2"], free, p)
+            if d is not None:
+                source = "BBR-areal"
+            else:
+                d = 0.0 if small else p["udhaeng_standard_m"]
+                source = "standard (småbygning)" if small else "standard"
+                if d and _wall_outline(geom, d, free, p) is None:
+                    d, source = 0.0, "ingen (omridset for smalt)"
+        if 0 < d < p["udhaeng_min_m"]:
+            d = 0.0
+        r["_overhang"] = d
+        r["model_udhaeng_m"] = round(d, 2)
+        r["model_udhaeng_kilde"] = source
+
+
+def place_walls(models: list[dict], p: dict = DEFAULTS) -> None:
+    """Wall outline per building from its overhang, on the 3D outline (passages cut out). r["_wall_geom"]."""
+    outlines = [m.get("_geom_3d", m["_geom"]) for m in models]
+    for r, geom in zip(models, outlines):
+        r["_wall_geom"] = None
+        d = r.get("_overhang") or 0.0
+        if d <= 0 or _is_open(r):
+            continue
+        free = _free_edges(geom, [o for o in outlines if o is not geom], p)
+        wall = _wall_outline(geom, d, free, p)
+        if wall is not None and wall is not geom:
+            r["_wall_geom"] = wall
+
+
 def _building_mesh(r: dict, mesh: Mesh, p: dict, foot=None) -> None:
     """Simple building: roof from the fitted shape, walls from the outline down to the terrain.
 
@@ -644,6 +746,10 @@ def _building_mesh(r: dict, mesh: Mesh, p: dict, foot=None) -> None:
                 mesh.tri(*np.column_stack([xy, z - slab]), roof_color, facing=-UP)
         corners += [np.asarray(ring.coords) for ring in (piece.exterior, *piece.interiors)]
     extra = np.vstack(corners) if corners else np.empty((0, 2))
+    walls = r.get("_wall_geom")
+    if walls is not None and not is_open:
+        _overhang_mesh(r, mesh, p, foot, footprints, walls, extra, roof_color, wall_color, lowest)
+        return
     for ring in (ring for geom in footprints for ring in (geom.exterior, *geom.interiors)):
         pts = _densify(np.asarray(ring.coords), extra)
         if foot is not None and not is_open:
@@ -662,6 +768,38 @@ def _building_mesh(r: dict, mesh: Mesh, p: dict, foot=None) -> None:
                 z0 = lowest if np.isnan(z0) else z0
                 z1 = float(_roof_z(roof, np.array([x]), np.array([y]))[0]) - slab
                 _post(mesh, x, y, min(z0, z1), z1, p["aaben_stolpe_m"], wall_color)
+
+
+def _overhang_mesh(r: dict, mesh: Mesh, p: dict, foot, footprints, walls, roof_corners, roof_color, wall_color,
+                   lowest: float) -> None:
+    """Fascia at the roof edge, soffit under the overhang, walls at the wall outline up to the soffit."""
+    roof = r["_roof"]
+    t = p["udhaeng_stern_m"]
+    regions = _regions(roof, p["tondetag_strimler"])
+    for ring in (ring for geom in footprints for ring in (geom.exterior, *geom.interiors)):
+        pts = _densify(np.asarray(ring.coords), roof_corners)
+        top = _roof_z(roof, pts[:, 0], pts[:, 1])
+        _wall_band(mesh, pts, top - t, top, roof_color)
+    corners = []
+    for geom in footprints:
+        for region in regions:
+            for piece in _polygons(geom.difference(walls).intersection(region)):
+                for tri in shapely.get_parts(shapely.constrained_delaunay_triangles(piece)):
+                    xy = np.asarray(tri.exterior.coords)[:3]
+                    z = _roof_z(roof, xy[:, 0], xy[:, 1]) - t
+                    mesh.tri(*np.column_stack([xy, z]), roof_color, facing=-UP)
+            corners += [np.asarray(ring.coords) for pc in _polygons(walls.intersection(region))
+                        for ring in (pc.exterior, *pc.interiors)]
+    extra = np.vstack(corners) if corners else np.empty((0, 2))
+    for wall in (orient(g, 1.0) for g in _polygons(walls)):
+        for ring in (wall.exterior, *wall.interiors):
+            pts = _densify(np.asarray(ring.coords), extra)
+            if foot is not None:
+                pts = _subdivide(pts, p["vaeg_segment_m"])
+            top = _roof_z(roof, pts[:, 0], pts[:, 1]) - t
+            base = np.full(len(pts), lowest) if foot is None else foot(pts[:, 0], pts[:, 1])
+            base = np.minimum(np.where(np.isnan(base), lowest, base), top)
+            _wall_band(mesh, pts, base, top, wall_color)
 
 
 def _wall_band(mesh: Mesh, pts: np.ndarray, base: np.ndarray, top: np.ndarray, color) -> None:
@@ -1230,6 +1368,7 @@ def write(out_dir: Path, title: str, grid: Grid, parcel, dtm: np.ndarray, dsm: n
     foot = _wall_foot(dtm, grid, p)
     passages = find_passages(records, grid, dsm, p) if dsm is not None else []
     models = [r for r in records if r.get("_roof") is not None] + passages
+    place_walls(models, p)
     simple, measured = [], []
     for r in models:
         mesh = Mesh()
