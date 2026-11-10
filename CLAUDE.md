@@ -17,6 +17,7 @@ Pipelinen kører i Docker. `run.sh` bygger imaget og sender argumenterne videre 
 ./run.sh --bfe 5522814 --uden-punktsky                     # spring punktskyen over (ca. 350 MB/km² første gang)
 ./run.sh --bfe 5522814 --omraade fil.geojson               # polygon fra fil (EPSG:4326 eller 25832)
 ./run.sh --bfe 5522814 --uden-matrikel --center 558376,6369071 --size 400   # kun forhåndsvisning
+python3 -m analyzer.cleanup                    # oprydning i runs/: viser kun, --udfoer rydder op (se --help)
 ```
 
 Lokalt uden Docker: opret `.venv/` (git-ignoreret), kør `pip install -r requirements.txt` og derefter `python -m analyzer.run ...` med `.env` indlæst. Der er ingen tests, linter eller build-trin. En ændring verificeres med en run og `viewer.html`.
