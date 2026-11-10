@@ -42,7 +42,25 @@ def _tiles(grid: Grid, dataset: str) -> list[dict]:
     tiles = [f for f in r.json().get("availableFileDownloads", []) if f["dataSetName"] == dataset]
     if not tiles:
         raise SourceUnavailable(f"Ingen punktsky-filer i {dataset} for området")
-    return tiles
+    return _newest_per_tile(tiles)
+
+
+def _newest_per_tile(tiles: list[dict]) -> list[dict]:
+    """One file per 1 km tile: the latest delivery.
+
+    A dataset can hold several deliveries of the same tile (e.g. PUNKTSKY_1km_6233_566 from a 2022 scan and
+    DHM_PUNKTSKY_1km_6233_566 from a 2025 rescan). Counting both mixes vegetation that is gone with what stands now.
+    """
+    def rank(t: dict) -> tuple:
+        return t.get("dataDeliveryNumber") or 0, t.get("generationTime") or ""
+
+    best: dict[tuple[int, int], dict] = {}
+    for t in tiles:
+        bb = t.get("boundingBox") or {}
+        key = (round(bb.get("minX", 0) / 1000), round(bb.get("minY", 0) / 1000))
+        if key not in best or rank(t) > rank(best[key]):
+            best[key] = t
+    return list(best.values())
 
 
 def _download(tile: dict, dataset: str) -> Path:

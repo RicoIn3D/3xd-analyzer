@@ -109,6 +109,7 @@ Fuld liste: https://grunddatamodel.datafordeler.dk/objekttypekatalog/GeoDanmark/
   - Hent fil: `https://api.datafordeler.dk/FileDownloads/v1.0/GetPointCloudFile?Id=<id>&apiKey=..`
 - Datasæt: `Punktsky` (gældende), `Punktsky2023`, `Punktsky2015`, `Punktsky2007`. Fra v0.4.1 bruger pipelinen `Punktsky` og falder tilbage til `Punktsky2023`. `run.json` viser datasæt, filer og optagedato (fra LAS-headeren, kan være behandlingsdato).
 - Fra 2025 laserskanner Klimadatastyrelsen ca. 20 % af landet hvert år (2025: primært Midt- og Vestjylland). Den gældende punktsky kan derfor være nyere end 2023 for nogle områder.
+- `Punktsky` kan have flere leverancer af samme tile, fx `PUNKTSKY_1km_6233_566.laz` (`dataDeliveryNumber` 1, skannet 2022) og `DHM_PUNKTSKY_1km_6233_566.laz` (`dataDeliveryNumber` 2, skannet 2025). Til og med v0.6.2 talte pipelinen begge med, så fældet vegetation fra den gamle skanning kom med (set 2026-11-10: træer 14 m² uden punktsky, 256 m² med begge leverancer). Fra v0.7.0 bruges kun den nyeste leverance pr. tile (højeste `dataDeliveryNumber`, derefter nyeste `generationTime`).
 - Cachen er pr. datasæt (`cache/dhm/<datasæt>_<fil>`). Skiftet til `Punktsky` henter tiles igen første gang, også hvor de er identiske med 2023.
 - Filer á 1×1 km i LAZ. Testcasens fil `PUNKTSKY_1km_6369_558.laz` er 349 MB. Den gemmes i `cache/dhm/` og hentes kun én gang.
 - **Faldgrube:** API'et svarer `application/zip`, men sender selve LAZ-filen. Pipelinen kigger på de første bytes (`LASF`).
