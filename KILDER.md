@@ -22,6 +22,7 @@ Overblik (status pr. 2026-10-07, efter første run med rigtige data):
 | Copernicus Data Space (øvrige lag) | Støtte: radar, CLMS m.m. | Nøgler sat, ikke bygget endnu |
 | Danmarks Højdemodel, punktsky (Datafordeler) | Afgør træer og buske (laserpunkternes klasser) | I brug fra v0.3, virker. Fra v0.4.1: gældende `Punktsky` først, `Punktsky2023` som fallback |
 | Skråfoto 2025 (Dataforsyningen) | Visuel kontrol i viewer, fem retninger | I brug fra v0.3, virker |
+| Egne fotos + AnySplat (valgfri) | Facadesplat i 3D-modellen (sideprojekt, kun visning) | I brug fra v0.9, kun hvor der findes fotos: `fotos/bfe-<nr>/`, git-ignoreret (GDPR). Egne fotos har ingen licensbegrænsning. AnySplat er MIT, men bygger på VGGT (CC BY-NC 4.0), og `src/utils/image.py` er CC BY-NC-SA: kun prototype |
 | Fotoindex | Optagedato for ortofoto | Kandidat |
 | Overture Maps, Meta/WRI Canopy Height, Mapillary | Kontrol og belægningstype | Kandidat (se nederst) |
 | Danmarks Arealinformation, Basemap04, Plandata | Baggrund | Kandidat, lav prioritet |
