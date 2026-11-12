@@ -98,7 +98,7 @@ Terrænet deles i ét mesh pr. arealtype. Belægningen deles yderligere efter de
 **Hardware:** Ricos PC har NVIDIA GeForce RTX 3050 med 8 GB (WSL, driver 610.88). Nok til få billeder. SHARPs checkpoint er 2,8 GB. Solv3R-demoen kræver CUDA-toolkit 12.8 og på Windows Visual Studios C++-værktøjer (gsplat kompilerer sine kerner). AnySplat er udviklet med PyTorch 2.2 og CUDA 12.1 og bruger pytorch3d.
 
 **Trin:**
-1. Tag 5–10 fotos rundt om testhuset (BFE 4208619), eller hent Mapillary-billeder, når de er offentliggjort.
+1. Tag 5–10 fotos rundt om testhuset (Holmelundsvej 5, Søften, BFE 4208619), eller hent Mapillary-billeder, når de er offentliggjort.
 2. Kør AnySplat lokalt; prøv efteroptimeringen i fuld opløsning. Sammenlign evt. med Solv3R-demoen.
 3. Placer splatten på modellen: skala og rotation fra kamerapositionerne mod GeoDanmark-omridset og DHM-tagkanten (fx ICP mod bygningens punkter fra punktskyen).
 4. Projicer splatten (eller fotoene med de fundne kameraer) på facaderne i stedet for skråfotoet, og vis splatten i `model.html` ved siden af.

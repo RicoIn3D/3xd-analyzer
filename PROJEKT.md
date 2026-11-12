@@ -31,6 +31,18 @@ Resultatet er m² pr. arealtype pr. ejendom, plus et kort med polygoner. Det kan
 
 Kilde: mail fra Mikael Kirkegaard, 2026-10-07, "Test af AI beregnede udearealer".
 
+### Testhus (BFE 4208619)
+
+Et fritliggende parcelhus. Bruges til runs i `runs/OVERSIGT.md` og til opgave 5 i [sideprojekt_3d/README.md](sideprojekt_3d/README.md).
+
+| Felt | Værdi |
+|---|---|
+| Adresse | Holmelundsvej 5, Søften, 8382 Hinnerup |
+| SFE / BFE-nummer | 4208619 |
+| Ejendomsareal | ca. 889 m² (MAT) |
+| Koordinat (WGS84) | ca. 56.24170, 10.08143 |
+| Koordinat (EPSG:25832) | ca. 567023, 6233506 |
+
 ## Datakilder
 
 Alle kilder med links, licenser, opløsning og vurdering står i [KILDER.md](KILDER.md).
