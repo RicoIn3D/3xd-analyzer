@@ -82,7 +82,7 @@ Velegnet til en subagent. Oprettet 2026-11-03.
 
 Terrænet deles i ét mesh pr. arealtype. Belægningen deles yderligere efter de typer, `analyzer/paving.py` allerede finder. Materialerne får faste navne, som Unity og browseren kan erstatte med rigtige materialer (gentagne teksturer, fx fra ambientCG, CC0). Navnene i første omgang er `graes`, `buske`, `asfalt`, `fliser_sten_beton`, `grus` og `belaegning_ukendt`. Senere kan det blive et Unity Terrain med splatmap og græs som grass details.
 
-### Opgave 5: facader fra få fotos med Gaussian splats (ikke startet, aftalt 2026-11-10)
+### Opgave 5: facader fra få fotos med Gaussian splats (trin 1–3 lavet 2026-11-12, aftalt 2026-11-10)
 
 **Problem:** skråfotos er ca. 10 cm pr. pixel. Klimadatastyrelsen hæver ikke opløsningen af hensyn til privatliv. Facaderne i `bygninger_skraafoto.glb` bliver derfor grove. Bedre facader skal komme fra jordhøjde: egne telefonfotos (5–10 rundt om huset) eller Mapillary (CC BY-SA, dækning varierer pr. gade).
 
@@ -105,6 +105,21 @@ Terrænet deles i ét mesh pr. arealtype. Belægningen deles yderligere efter de
 5. Sammenlign med skråfoto-teksturen. Notér licens og kilde for hvert billede i `run.json`.
 
 **Note (PoC, 2026-11-10):** Firmaet har et 360°-kamera og folk i marken, og en lidar til ca. 100.000 kr. er en mulighed. Egne billeder og egen lidar har ingen licensbegrænsninger, kun GDPR (slør personer og nummerplader). Licenser følger modelvægtene, også i skyen: Solv3R og SHARP kun til forskning og evaluering. AnySplat er MIT, men bygger på VGGT, og `facebook/VGGT-1B` er CC BY-NC 4.0, så oprindelsen skal afklares før et produkt (alternativ: `VGGT-1B-Commercial` med særlicens, eller COLMAP og gsplat). Mapillary er CC BY-SA (kildeangivelse, share-alike på afledte modeller). Ollama hjælper ikke her: den kører sprogmodeller, ikke 3D-modeller. Mere GPU fås ved at leje en cloud-GPU eller køre AnySplat-demoen som Hugging Face Space på betalt GPU.
+
+**Lavet (v0.9.0, 2026-11-12):** trin 1–3 og visning, som et valgfrit trin. Uden fotos springer pipelinen det over.
+1. Fotos i `fotos/bfe-<nr>/facade/` (git-ignoreret). `sideprojekt_3d/anysplat/anysplat.sh <bfe>` kører AnySplat i Docker (PyTorch 2.7, CUDA 12.8, så RTX 5060 Ti/Blackwell virker) og skriver `fotos/bfe-<nr>/anysplat/`: `gaussians.ply`, `cameras.json` (kamera pr. foto i AnySplats eget koordinatsystem) og en `rgb.mp4`/`depth.mp4` mellem fotoene. AnySplats kode hentes til `cache/anysplat/` på en fast commit; vægtene (ca. 7,5 GB) caches i `~/.cache/huggingface`.
+2. `./run.sh --bfe <nr>` finder splatten, og `sideprojekt_3d/splat.py` lægger den på modellen. Op er normalen til planet gennem kameraerne (fotos taget i øjenhøjde). Jorden er de laveste splats under kameraerne. Væggene er celler set oppefra, hvor splats spænder over mindst 1,2 m i højden. De tilpasses vægomridset (efter tagudhæng, åbne bygninger uden vægge) med en 2D-similaritet (drejning, skala, forskydning): mange startvinkler og -skalaer, hver forfinet med trimmet ICP. Scoren er præcision (splattens vægge på en modelvæg) og dækning (modellens vægge dækket), med straf for kameraer inde i en bygning. Højden: splattens jord sættes på DHM-terrænet under kameraerne.
+3. `model.html` viser splatten som lag (GaussianSplats3D 0.4.7 på three.js). `output/model/facadesplat.splat` er splatten i modellens glTF-koordinater. `run.json` → `model.facadesplat` har kvaliteten, matricen til EPSG:25832/DVR90 og kameraernes placering.
+4. Håndjustering: `fotos/bfe-<nr>/anysplat/placering.json` med `{"drej_grader": 0, "flyt_m": [øst, nord, op], "skala_faktor": 1}` justerer den automatiske placering (drejning om væggenes midte).
+
+**Testhuset (16 fotos, uden EXIF):** 1,5 mio. splats, 8,1 GB GPU. Skala 13,5 m pr. AnySplat-enhed. Nordvest- og nordøstfacaden ligger på modellens vægge (RMS 0,17 m på de vægge, der passer). Sydvestsiden ligger 2–3 m forkert, fordi splatten er bøjet: 39 % af væggene dækket, præcision 35 %. Jorden i splatten er skålformet, op til 1 m under terrænet, så kameraerne havner 2,1 m over terrænet (forventet ca. 1,5 m). Én stiv placering kan ikke rette det.
+
+**Optagelse (bedre input):** gå hele vejen rundt om huset og tilbage til start (lukket ring), så geometrien ikke driver. Hold samme afstand (4–6 m) og højde, huset midt i billedet (AnySplat beskærer til 448×448 fra midten), hjørner skråt med to vægge i billedet, 60–70 % overlap, lås fokus og eksponering, overskyet vejr. Video er lettere end fotos: træk 24–32 billeder ud med ffmpeg (16 billeder brugte 8,1 GB af 16 GB).
+
+**Mangler:**
+- Trin 4: projicér fotoene med de fundne kameraer på facaderne i stedet for skråfotoet. Kræver en bedre placering end nu.
+- Ikke-stiv tilpasning (fx pr. væg), så en bøjet splat kan rettes.
+- Overlap mellem splat og bygningsmodel: begge vises; slå bygningslaget fra for at se splatten alene.
 
 **Ikke formålet:** at måle. Udhæng og mål kommer fra BBR, DHM og evt. fotogrammetri med mange billeder.
 

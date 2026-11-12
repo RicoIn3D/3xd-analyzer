@@ -42,6 +42,7 @@ from analyzer.classes import BYGNING, COLORS, TRAEER, UDENFOR
 from analyzer.grid import Grid
 from analyzer.paving import TYPE_COLORS
 from analyzer.sources.skraafoto import STAC_URL, project
+from sideprojekt_3d import splat as facade_splat
 
 DEFAULTS = {
     "terraen_skridt_px": 2,       # terrain mesh uses every n-th grid cell (0.5 m on the 0.25 m grid)
@@ -1315,7 +1316,7 @@ def write(out_dir: Path, title: str, grid: Grid, parcel, dtm: np.ndarray, dsm: n
           classes: np.ndarray, ortho: np.ndarray | None, records: list[dict], obliques: list[dict] | None = None,
           gd_trees: list[dict] | None = None, vegetation: np.ndarray | None = None,
           paving_types: np.ndarray | None = None, terrain_texture: np.ndarray | None = None,
-          p: dict = DEFAULTS) -> dict:
+          splat_dir: Path | None = None, p: dict = DEFAULTS) -> dict:
     """Write terrain and building models as .glb, model.json and a self-contained model.html. Returns run.json info.
 
     terrain_texture is a sharper orthophoto on the grid's extent (any resolution) draped on the terrain as a texture;
@@ -1324,6 +1325,7 @@ def write(out_dir: Path, title: str, grid: Grid, parcel, dtm: np.ndarray, dsm: n
     obliques are the run's skråfoto entries (id, dato); with them the buildings are also written photo-textured.
     gd_trees are GeoDanmark's Trae/Traegruppe objects and vegetation the point cloud's vegetation points (x, y, z, class).
     paving_types (analyzer.paving) colour the paving in the class-coloured terrain by type.
+    splat_dir is an AnySplat output folder (optional, see splat.py); its splat is placed on the buildings and shown.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     inside = classes != UDENFOR
@@ -1430,14 +1432,32 @@ def write(out_dir: Path, title: str, grid: Grid, parcel, dtm: np.ndarray, dsm: n
              f"Træer og buske målt: punktskyens vegetationspunkter ({len(points[0]):,} stk.) farvet fra ortofotoet"
              .replace(",", "."))
 
+    splat_b64, splat_info = None, None
+    if splat_dir is not None and models:
+        try:
+            roofs = [r["_roof"] for r in records if r.get("_roof") is not None]
+            z_max = max(rf["ground"] + rf["ridge"] for rf in roofs) + facade_splat.DEFAULTS["splat_max_over_tag_m"]
+            data, splat_info = facade_splat.build(
+                splat_dir, [m.get("_geom_3d", m["_geom"]) for m in models],
+                [m.get("_wall_geom") or m.get("_geom_3d", m["_geom"]) for m in models if not _is_open(m)],
+                dtm, grid, origin, z_max)
+            if data:
+                (out_dir / "facadesplat.splat").write_bytes(data)
+                splat_b64 = base64.b64encode(data).decode("ascii")
+                meta["splat"] = {k: v for k, v in splat_info.items() if k != "kameraer"}
+        except Exception as e:  # the splat is an extra; never lose the model over it
+            splat_info = {"status": "fejl", "fejl": f"{type(e).__name__}: {e}"}
+
     meta["filer"] = files
     meta["parametre"] = p
     (out_dir / "model.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     payload = {name: base64.b64encode((out_dir / name).read_bytes()).decode("ascii") for name in files}
     html = (MODEL_TEMPLATE.replace("__TITLE__", title)
-            .replace("__DATA__", json.dumps({"files": files, "glb": payload, "meta": meta}, ensure_ascii=False)))
+            .replace("__DATA__", json.dumps({"files": files, "glb": payload, "meta": meta, "splat": splat_b64},
+                                            ensure_ascii=False)))
     (out_dir / "model.html").write_text(html, encoding="utf-8")
-    return {"origo_epsg25832_dvr90": list(origin), "filer": list(files), "bygninger": len(simple) - len(passages),
+    return {"origo_epsg25832_dvr90": list(origin), "filer": list(files) + (["facadesplat.splat"] if splat_b64 else []),
+            "bygninger": len(simple) - len(passages), "facadesplat": splat_info,
             "gennemgange": [r["_extras"] for r in passages],
             "tage_maalt": len(measured), "skraafotos": textured_info,
             "traeer": {"i_alt": len(trees), "geodanmark": sum(t["kilde"] == "GeoDanmark" for t in trees),
@@ -1483,7 +1503,8 @@ MODEL_TEMPLATE = """<!doctype html>
 <div id="view"></div>
 <script type="importmap">
 { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-               "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/" } }
+               "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+               "gaussian-splats-3d": "https://cdn.jsdelivr.net/npm/@mkkellogg/gaussian-splats-3d@0.4.7/build/gaussian-splats-3d.module.js" } }
 </script>
 <script type="module">
 import * as THREE from "three";
@@ -1546,6 +1567,23 @@ for (const [name, text] of Object.entries(DATA.files)) {
   box.dataset.name = name;
   layers.appendChild(label);
 }
+// Facade splat (optional): Gaussian splat from ground-level photos, already placed in the model's frame
+if (DATA.splat) {
+  const GS = await import("gaussian-splats-3d");
+  const splat = new GS.DropInViewer({ gpuAcceleratedSort: false, sharedMemoryForWorkers: false });
+  const url = URL.createObjectURL(new Blob([toBuffer(DATA.splat)]));
+  await splat.addSplatScene(url, { format: GS.SceneFormat.Splat, showLoadingUI: false, splatAlphaRemovalThreshold: 5 });
+  URL.revokeObjectURL(url);
+  scene.add(splat);
+  const s = DATA.meta.splat;
+  const label = document.createElement("label");
+  label.innerHTML = `<input type="checkbox" checked><span>Facadesplat fra ${s.billeder} fotos (AnySplat, kun til at se på). ` +
+    `Placering: ${Math.round(s.daekning * 100)} % af væggene dækket, ${Math.round(s.praecision * 100)} % af splattens vægge ` +
+    `rammer en væg${s.haandjustering ? ", håndjusteret" : ""}</span>`;
+  label.querySelector("input").addEventListener("change", e => { splat.visible = e.target.checked; });
+  layers.appendChild(label);
+}
+
 const o = DATA.meta.origo_epsg25832_dvr90;
 document.getElementById("about").textContent = `${DATA.meta.akser}. Origo: ${o[0]} Ø, ${o[1]} N, ${o[2]} m (DVR90), ` +
   "i EPSG:25832. Den simple model er en baseline: tagform og højder er estimeret fra Danmarks Højdemodel, " +

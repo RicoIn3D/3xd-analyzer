@@ -20,7 +20,7 @@ from rasterio.features import geometry_mask
 from shapely.geometry import shape
 from shapely.ops import transform as shapely_transform, unary_union
 
-from sideprojekt_3d import model3d
+from sideprojekt_3d import model3d, splat as facade_splat
 
 from . import VERSION, classify, outputs, paving
 from . import buildings as bldg
@@ -351,7 +351,7 @@ def main() -> None:
             hover["bygning"] = bld_index
 
     # 6. 3D model: terrain and buildings as .glb for Unity and model.html
-    model_info = None
+    model_info, splat_dir = None, None
     if dtm is not None:
         terrain_texture = None
         if background_year is not None:
@@ -360,12 +360,15 @@ def main() -> None:
             fine_rgb = src.fetch(f"Ortofoto {background_year} RGB til 3D-terræn (Dataforsyningen)",
                                  dataforsyningen.orthophoto, fine, background_year)
             terrain_texture = fine_rgb["billede"] if fine_rgb is not None else None
+        # Optional: a facade splat made from our own photos (fotos/bfe-<nr>/anysplat, see sideprojekt_3d/anysplat)
+        splat_dir = facade_splat.find(ROOT / "fotos" / f"bfe-{args.bfe}" / "anysplat")
         try:
             model_info = model3d.write(out / "model", f"Analyzer 3D – BFE {args.bfe}", grid, parcel, dtm, dsm, classes,
                                        background, bld_records, obliques=skraa_images,
                                        gd_trees=gdk["traeer"] if gdk else None,
                                        vegetation=lidar["vegetation"] if lidar else None,
-                                       paving_types=paving_types, terrain_texture=terrain_texture)
+                                       paving_types=paving_types, terrain_texture=terrain_texture,
+                                       splat_dir=splat_dir)
         except Exception as e:  # the model is an extra; never lose the run over it
             model_info = {"fejl": redact(f"{type(e).__name__}: {e}")}
             traceback.print_exc()
@@ -392,7 +395,8 @@ def main() -> None:
                                        "pixels": [grid.width, grid.height]},
         "metode": method, "parametre": params, "bygning_parametre": bldg.DEFAULTS,
         "belaegning_parametre": paving.DEFAULTS if paving_types is not None else None,
-        "model_parametre": model3d.DEFAULTS, "model": model_info, "skraafoto": skraa_images, "note": args.note, "kilder": src.items,
+        "model_parametre": model3d.DEFAULTS,
+        "splat_parametre": facade_splat.DEFAULTS if splat_dir else None, "model": model_info, "skraafoto": skraa_images, "note": args.note, "kilder": src.items,
         "argumenter": vars(args),
     }
     (run_dir / "run.json").write_text(json.dumps(run_info, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -412,6 +416,12 @@ def main() -> None:
     print(f"Færdig: {run_dir.relative_to(ROOT)}/viewer.html")
     if model_info and "filer" in model_info:
         print(f"  3D-model: {run_dir.relative_to(ROOT)}/output/model/model.html ({model_info['bygninger']} bygninger)")
+        s = model_info.get("facadesplat")
+        if s and s.get("status") == "ok":
+            print(f"  Facadesplat: {s['billeder']} fotos, {s['daekning']:.0%} af væggene dækket, "
+                  f"præcision {s['praecision']:.0%}, kameraer {s['kamera_hoejde_over_terraen_m']} m over terræn")
+        elif s:
+            print(f"  Facadesplat: {s.get('fejl') or s.get('status')}")
     if not valid_area:
         print("  ADVARSEL: forhåndsvisning. Arealerne gælder firkanten, ikke ejendommen.")
     for k, v in area.items():
